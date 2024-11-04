@@ -1,0 +1,18 @@
+transformers==4.45.1
+ipykernel==6.29.5 
+
+# ViTPose
+git+https://github.com/ViTAE-Transformer/ViTPose
+-r requirements/ViTPose/build.txt
+-r requirements/ViTPose/runtime.txt
+-r requirements/ViTPose/tests.txt
+-r requirements/ViTPose/optional.txt
+
+# AdaFace
+# git+https://github.com/mk-minchul/AdaFace
+# -r requirements/AdaFace/requirements.txt
+# TODO: possible alternative: https://github.com/jung-jun-uk/unpg
+
+# yolo-face
+git+https://github.com/akanametov/yolo-face
+-r requirements/yolo-face/requirements.txt

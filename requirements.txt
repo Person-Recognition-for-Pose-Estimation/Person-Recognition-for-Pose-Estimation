@@ -1,5 +1,8 @@
 transformers==4.45.1
 ipykernel==6.29.5 
+datasets==3.1.0
+huggingface-hub==0.25.1
+tqdm==4.66.5
 
 # ViTPose
 git+https://github.com/ViTAE-Transformer/ViTPose
@@ -9,10 +12,11 @@ git+https://github.com/ViTAE-Transformer/ViTPose
 -r requirements/ViTPose/optional.txt
 
 # AdaFace
+# TODO: Add custom AdaFace repo
 # git+https://github.com/mk-minchul/AdaFace
-# -r requirements/AdaFace/requirements.txt
-# TODO: possible alternative: https://github.com/jung-jun-uk/unpg
+-r requirements/AdaFace/requirements.txt
 
 # yolo-face
-git+https://github.com/akanametov/yolo-face
+omegaconf==2.3.0
+ultralytics>=8.3.29
 -r requirements/yolo-face/requirements.txt

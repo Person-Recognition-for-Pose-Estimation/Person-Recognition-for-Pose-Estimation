@@ -1,2 +1,12 @@
+# Python
 venv/
+__pycache__/
+
+# Models
 component_models/
+edited_components/
+
+# Dataset
+dataset_folders/
+!dataset_folders/yolo_face/data.yaml
+!dataset_folders/ada_face/.gitkeep

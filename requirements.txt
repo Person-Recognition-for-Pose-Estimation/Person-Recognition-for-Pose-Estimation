@@ -1,8 +1,11 @@
-transformers==4.45.1
+transformers==4.48.1
 ipykernel==6.29.5 
 datasets==3.1.0
 huggingface-hub==0.25.1
 tqdm==4.66.5
+wheel
+accelerate>=0.26.0
+pytorch-lightning
 
 # ViTPose
 git+https://github.com/ViTAE-Transformer/ViTPose
@@ -12,8 +15,7 @@ git+https://github.com/ViTAE-Transformer/ViTPose
 -r requirements/ViTPose/optional.txt
 
 # AdaFace
-# TODO: Add custom AdaFace repo
-# git+https://github.com/mk-minchul/AdaFace
+# git+https://github.com/Person-Recognition-for-Pose-Estimation/AdaFace
 -r requirements/AdaFace/requirements.txt
 
 # yolo-face

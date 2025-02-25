@@ -19,5 +19,8 @@
         "venv",
         "vitpose",
         "yolov"
+    ],
+    "python.analysis.extraPaths": [
+        "./libs"
     ]
 }

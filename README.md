@@ -18,6 +18,7 @@ All work has been done on Ubuntu 22.04 LTS and Python 3.10.12. All other configu
 - `component_models/`: Holds the original downloads of the separate models. Created by `download_models.py`
 - `dataset_folders/`: Holds the datasets needed to be stored locally. 
 - `edited_components/`: Holds the modified versions of the component models and the untrained combined model. Created by `modify_models.py`
+- `libs/`: Holds individal files from AdaFace that are needed for the project.
 - `notebooks/`: Holds the notebooks used in development to create the model.
   - `download_models.ipynb`: Downloads the models from the HuggingFace hub.
   - `modify_models.ipynb`: Modifies the models and combines into the multi-task model.
@@ -25,5 +26,4 @@ All work has been done on Ubuntu 22.04 LTS and Python 3.10.12. All other configu
 - `requirements/`: Holds all the requirements for all of the projects for each component model.
 - `scripts/`: Same as `notebooks/` but in script form for easy execution.
 - `download_datasets.ipynb`: Installation guide for the datasets.
-- `net_adaface.py`: Adaface's `inference.py` file, needed for `modify_models.py`.
 - `requirements.txt`: All the requirements for the project.

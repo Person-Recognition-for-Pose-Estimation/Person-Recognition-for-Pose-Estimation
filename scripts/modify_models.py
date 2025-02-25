@@ -4,18 +4,23 @@ import torchvision.models as models
 import torch.nn as nn
 import os
 
+
 filepath = pathlib.Path(__file__).parent.resolve()
 edited_components_dir = os.path.join(filepath, "..", "edited_components")
 
 if not os.path.exists(edited_components_dir):
     os.makedirs(edited_components_dir)
 
+
 #################### YOLO ####################
+
 
 from ultralytics import YOLO
 
+
 model_path = os.path.join(filepath, "..", "component_models", "yolov8n.pt")
 yolo_model = YOLO(model_path)
+
 
 class CustomYOLO(nn.Module):
     def __init__(self, yolo_model, backbone_channels=512):
@@ -32,11 +37,13 @@ class CustomYOLO(nn.Module):
         x = self.yolo(x)
         return x
 
+
 # Person
 model_path = os.path.join(filepath, "..", "component_models", "yolov8n.pt")
 yolo_model = YOLO(model_path)
 person_detect_branch = CustomYOLO(yolo_model)
 torch.save(person_detect_branch, os.path.join(filepath, "..", "edited_components", "custom_yolo.pth"))
+
 
 # Face
 model_path = os.path.join(filepath, "..", "component_models", "yolov8n-face.pt")
@@ -47,39 +54,89 @@ torch.save(face_detect_branch, os.path.join(filepath, "..", "edited_components",
 
 #################### AdaFace ####################
 
-import net_adaface
 
-ada_face_model_path = 'component_models/adaface_ir50_ms1mv2.ckpt'
-ada_face_model = net_adaface.build_model('ir_50')
-statedict = torch.load(ada_face_model_path)['state_dict']
-model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
-ada_face_model.load_state_dict(model_statedict)
+import sys
+import os
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'libs'))
+
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+
+import net_adaface
+from net_adaface import build_model
+from head_adaface import build_head
+
 
 class CustomAdaFace(nn.Module):
-    def __init__(self, ada_face_model: net_adaface.Backbone, backbone_channels=512):
+    def __init__(self, pretrained_path, config):
         super(CustomAdaFace, self).__init__()
         
-        # Adapter to match YOLO's expected features (32 channels)
-        self.adapter = nn.Conv2d(2048, 64, kernel_size=1)
+        # Load the complete pre-trained AdaFace model
+        self.adaface_model = build_model(model_name=config.arch)
         
-        # Save the body and output
-        self.body = ada_face_model.body
-        self.output_layer = ada_face_model.output_layer
+        checkpoint = torch.load(pretrained_path)
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
 
-    def forward(self, backbone_features):
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
-        x = self.adapter(backbone_features)
+        
+        # Load weights except for input layer
+        filtered_state_dict = {k: v for k, v in state_dict.items() 
+                             if not k.startswith('input_layer')}
+        self.adaface_model.load_state_dict(filtered_state_dict, strict=False)
+        
+        # Replace input layer with an adapter that takes backbone features
+        self.adaface_model.input_layer = nn.Sequential(
+            nn.Conv2d(2048, 64, kernel_size=1),  # First reduce channels
+            nn.BatchNorm2d(64),
+            nn.PReLU(64),  # AdaFace uses PReLU
+            # Additional layers to match the processing of original input_layer
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.PReLU(64)
+        )
+        
+        # Original AdaFace head
+        self.head = build_head(
+            head_type=config.head,
+            embedding_size=512,
+            class_num=config.num_classes,
+            m=config.m,
+            h=config.h,
+            t_alpha=config.t_alpha,
+            s=config.s
+        )
+    
+    def forward(self, x, labels=None):
+        # Forward through modified AdaFace model
+        embeddings, norms = self.adaface_model(x)
+        
+        if labels is not None:
+            return self.head(embeddings, norms, labels)
+        return embeddings, norms
 
-        for idx, module in enumerate(self.body):
-            x = module(x)
 
-        x = self.output_layer(x)
-        norm = torch.norm(x, 2, 1, True)
-        output = torch.div(x, norm)
+class Config:
+    def __init__(self):
+        self.arch = 'ir_50'
+        self.head = 'adaface'
+        self.num_classes = 1000  # Update this based on your dataset
+        self.m = 0.4
+        self.h = 0.333
+        self.t_alpha = 0.01
+        self.s = 64.0
 
-        return output, norm
+config = Config()
 
-face_rec_branch = CustomAdaFace(ada_face_model)
+ada_face_model_path = os.path.join(filepath, "..", "component_models", "adaface_ir50_ms1mv2.ckpt")
+
+
+face_rec_branch = CustomAdaFace(ada_face_model_path, config)
 torch.save(face_rec_branch, os.path.join(filepath, "..", "edited_components", "custom_ada_face.pth"))
 
 
@@ -88,6 +145,7 @@ torch.save(face_rec_branch, os.path.join(filepath, "..", "edited_components", "c
 from transformers import AutoProcessor, VitPoseForPoseEstimation
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 class CustomVitPose(nn.Module):
     def __init__(self, vit_pose_model: VitPoseForPoseEstimation, backbone_channels=2048):
@@ -111,6 +169,7 @@ class CustomVitPose(nn.Module):
         x = self.adapter(backbone_features)
         return self.vit_pose(x)
 
+
 hf_vit_pose_model = VitPoseForPoseEstimation.from_pretrained("usyd-community/vitpose-base-simple", device_map=device)
 pose_detect_branch = CustomVitPose(hf_vit_pose_model)
 torch.save(pose_detect_branch, os.path.join(filepath, "..", "edited_components", "custom_vit_pose.pth"))
@@ -120,15 +179,12 @@ torch.save(pose_detect_branch, os.path.join(filepath, "..", "edited_components",
 
 resnet_model = models.resnet50(pretrained=True)
 
-from transformers import AutoImageProcessor, ResNetForImageClassification
-
-model = ResNetForImageClassification.from_pretrained("microsoft/resnet-50")
 
 class MultiTaskResNetFeatureExtractor(nn.Module):
     def __init__(self, original_model):
         super(MultiTaskResNetFeatureExtractor, self).__init__()
-
-        # Define the layers of the original model
+        
+        # Just the core ResNet layers
         self.conv1 = original_model.conv1
         self.bn1 = original_model.bn1
         self.relu = original_model.relu
@@ -137,50 +193,26 @@ class MultiTaskResNetFeatureExtractor(nn.Module):
         self.layer2 = original_model.layer2
         self.layer3 = original_model.layer3
         self.layer4 = original_model.layer4
-        self.avgpool = original_model.avgpool
-        # self.flatten = nn.Flatten()
-        
-        # # Define separate heads for different outputs, which have different sizes
-        # self.yolo_adapter = nn.Conv2d(2048, 512, kernel_size=1)
-        # self.ada_face_adapter = nn.Conv2d(2048, 64, kernel_size=1)
-        # self.vit_pose_adapter = 0 # TODO Change the output size to match ViT Pose
 
-    def forward(self, x, current_task):
+    def forward(self, x):
+        # Basic feature extraction
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        return x  # Output shape: [batch_size, 2048, H/32, W/32]
 
-        x = self.avgpool(x)
-
-        return x
-
-    #     # Get outputs for each head
-    #     return torch.where(current_task == 'person_detection' or current_task == 'face_detection',
-    #         self.yolo_forward(x),
-    #         torch.where(current_task == 'face_identification',
-    #             self.ada_face_forward(x),
-    #             self.vit_pose_forward(x)))
-    
-    # def yolo_forward(self, x):
-    #     return self.yolo_head(x)
-    
-    # def ada_face_forward(self, x):
-    #     return self.ada_face_head(x)
-    
-    # def vit_pose_forward(self, x):
-    #     return self.vit_pose_head(x)
 
 feature_extractor = MultiTaskResNetFeatureExtractor(resnet_model)
 torch.save(feature_extractor, os.path.join(filepath, "..", "edited_components", "resnet_feature_extractor.pth"))
 
 
 #################### Combined Model ####################
+
 
 class CombinedModel(nn.Module):
     def __init__(self, backbone, yolo_face, yolo_person, ada_face, vit_pose):
@@ -195,7 +227,6 @@ class CombinedModel(nn.Module):
         self.yolo_person = yolo_person
         self.ada_face = ada_face
         self.vit_pose = vit_pose
-
 
     def set_task(self, task_name):
         supported_tasks = ['face_detection', 'person_detection', 'pose_estimation', 'face_identification']
@@ -219,6 +250,7 @@ class CombinedModel(nn.Module):
                 )
             )
         )
+
 
 combined_model = CombinedModel(feature_extractor, face_detect_branch, person_detect_branch, face_rec_branch, pose_detect_branch)
 torch.save(combined_model, os.path.join(filepath, "..", "edited_components", "combined_model.pth"))

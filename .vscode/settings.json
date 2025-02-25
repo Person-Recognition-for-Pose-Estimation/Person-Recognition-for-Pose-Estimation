@@ -3,6 +3,7 @@
         "adaface",
         "avgpool",
         "CUHK",
+        "GELU",
         "huggingface",
         "ipykernel",
         "ipynb",

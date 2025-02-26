@@ -173,20 +173,34 @@ class CustomVitPose(nn.Module):
     def __init__(self, vit_pose_model: VitPoseForPoseEstimation, backbone_channels=2048):
         super(CustomVitPose, self).__init__()
         
-        # Get the hidden size from the model's config
         hidden_size = vit_pose_model.backbone.config.hidden_size
+        patch_size = vit_pose_model.backbone.config.patch_size
         
         self.adapter = nn.Sequential(
-            nn.Conv2d(backbone_channels, hidden_size, kernel_size=1),
+            # Initial channel reduction
+            nn.Conv2d(backbone_channels, hidden_size * 2, kernel_size=1),
+            nn.LayerNorm([hidden_size * 2]),
+            nn.GELU(),
+            
+            # Spatial processing
+            nn.Conv2d(hidden_size * 2, hidden_size * 2, 
+                     kernel_size=3, padding=1, groups=hidden_size * 2),  # Depth-wise
+            nn.Conv2d(hidden_size * 2, hidden_size, kernel_size=1),  # Point-wise
             nn.LayerNorm([hidden_size]),
-            nn.ReLU(),
-            nn.Conv2d(hidden_size, hidden_size, kernel_size=3, padding=1),
-            nn.LayerNorm([hidden_size]),
+            nn.GELU(),
+            
+            nn.Conv2d(hidden_size, hidden_size, kernel_size=patch_size, 
+                     stride=patch_size, padding=0),  # Match ViT patch size
         )
         
         self.vit_pose = vit_pose_model
         self.vit_pose.backbone.embeddings.patch_embeddings = nn.Identity()
-
+        
+        # Freeze normalization layers in ViT for stability
+        for module in self.vit_pose.modules():
+            if isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+                module.eval()
+    
     def forward(self, backbone_features):
         x = self.adapter(backbone_features)
         return self.vit_pose(x)

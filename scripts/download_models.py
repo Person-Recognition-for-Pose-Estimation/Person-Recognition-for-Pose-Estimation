@@ -6,9 +6,9 @@ import pathlib
 hf_folder = "components"
 
 # Models to download
-person_detector = "yolov8n.pt"
+person_detector = "yolo11n.pt"
 person_detector_path = os.path.join(hf_folder, person_detector)
-face_detector = "yolov8n-face.pt"
+face_detector = "yolov11n-face.pt"
 face_detector_path = os.path.join(hf_folder, face_detector)
 face_identifier = "adaface_ir50_ms1mv2.ckpt"
 face_identifier_path = os.path.join(hf_folder, face_identifier)
@@ -23,9 +23,15 @@ if not os.path.exists(component_models_dir):
     os.makedirs(component_models_dir)
 
 
-def hf_download(model_name, model_path, repo_id, folder_path):
+def hf_download(model_name: str, model_path: str, repo_id: str, folder_path: str) -> None:
     """
     Download a model from the Hugging Face model hub.
+
+    Args:
+        model_name (str): The name of the model file to download.
+        model_path (str): The path where the model file will be saved.
+        repo_id (str): The repository ID on Hugging Face.
+        folder_path (str): The local folder path where the model will be saved.
     """
 
     if os.path.exists(os.path.join(folder_path, model_name)):

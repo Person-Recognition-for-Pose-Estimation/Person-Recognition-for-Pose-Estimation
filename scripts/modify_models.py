@@ -18,35 +18,57 @@ if not os.path.exists(edited_components_dir):
 from ultralytics import YOLO
 
 
-model_path = os.path.join(filepath, "..", "component_models", "yolov8n.pt")
-yolo_model = YOLO(model_path)
-
-
 class CustomYOLO(nn.Module):
-    def __init__(self, yolo_model, backbone_channels=512):
+    def __init__(self, yolo_model, backbone_channels=2048):
         super(CustomYOLO, self).__init__()
+
+        # Gradual channel reduction with normalization and activation
+        self.adapter = nn.Sequential(
+        nn.Conv2d(backbone_channels, 512, kernel_size=1),
+        nn.BatchNorm2d(512),
+        nn.SiLU(),
         
-        # Adapter to match YOLO's expected features (32 channels)
-        self.adapter = nn.Conv2d(backbone_channels, 32, kernel_size=1)
+        nn.Conv2d(512, 256, kernel_size=3, padding=1),
+        nn.BatchNorm2d(256),
+        nn.SiLU(),
+        
+        nn.Conv2d(256, 64, kernel_size=1),
+        nn.BatchNorm2d(64),
+        nn.SiLU()
+        )
         
         # Remove the first two layers of YOLO, which are for processing input
-        self.yolo = nn.Sequential(*list(yolo_model.model.model)[2:])
+        self.yolo = nn.Sequential(*list(yolo_model.model.model)[3:])
         
     def forward(self, backbone_features):
         x = self.adapter(backbone_features)
         x = self.yolo(x)
         return x
+    
+    def forward(self, backbone_features):
+        x = self.adapter(backbone_features)
+        detections = self.yolo(x)
+        
+        # if self.training:
+        return detections
+        
+        # TODO: If inference, process detections
+        # processed_detections = []
+        # for detection in detections:
+        #     processed = self._process_detection(detection)
+        #     processed_detections.append(processed)
+        # return processed_detections
 
 
 # Person
-model_path = os.path.join(filepath, "..", "component_models", "yolov8n.pt")
+model_path = os.path.join(filepath, "..", "component_models", "yolo11n.pt")
 yolo_model = YOLO(model_path)
 person_detect_branch = CustomYOLO(yolo_model)
 torch.save(person_detect_branch, os.path.join(filepath, "..", "edited_components", "custom_yolo.pth"))
 
 
 # Face
-model_path = os.path.join(filepath, "..", "component_models", "yolov8n-face.pt")
+model_path = os.path.join(filepath, "..", "component_models", "yolov11n-face.pt")
 yolo_face_model = YOLO(model_path)
 face_detect_branch = CustomYOLO(yolo_face_model)
 torch.save(face_detect_branch, os.path.join(filepath, "..", "edited_components", "custom_yolo_face.pth"))

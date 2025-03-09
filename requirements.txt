@@ -11,6 +11,8 @@ huggingface-hub==0.25.1
 tqdm==4.66.5
 accelerate>=0.26.0
 pytorch-lightning
+wandb
+albumentations
 
 # ViTPose
 # git+https://github.com/ViTAE-Transformer/ViTPose

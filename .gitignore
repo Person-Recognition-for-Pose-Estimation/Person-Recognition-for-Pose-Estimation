@@ -12,3 +12,7 @@ dataset_folders/
 !dataset_folders/ada_face/.gitkeep
 
 z_notes/
+wandb/
+lightning_logs/
+logs/
+checkpoints/

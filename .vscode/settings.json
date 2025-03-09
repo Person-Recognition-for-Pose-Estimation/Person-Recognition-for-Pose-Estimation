@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "adaface",
+        "albumentations",
         "avgpool",
         "CUHK",
         "GELU",
@@ -19,6 +20,7 @@
         "usyd",
         "venv",
         "vitpose",
+        "wandb",
         "yolov"
     ],
     "python.analysis.extraPaths": [

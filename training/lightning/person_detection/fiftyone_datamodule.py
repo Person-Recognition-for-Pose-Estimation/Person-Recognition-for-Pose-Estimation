@@ -51,7 +51,7 @@ class FiftyOneCOCODataset(Dataset):
             self.dataset = foz.load_zoo_dataset(
                 "coco-2017",
                 split=split,
-                label_types=["detections"],
+                label_types=["detections", "keypoints"],
                 classes=["person"],  # Explicitly request person class
                 max_samples=max_samples,
                 shuffle=shuffle,
@@ -68,6 +68,9 @@ class FiftyOneCOCODataset(Dataset):
         print(f"Total samples: {len(self.samples)}")
         person_counts = [len([det for det in sample.ground_truth.detections if det.label == 'person']) 
                         for sample in self.samples]
+        
+        # person_counts = [len([det for det in sample.detections.detections if det.label == 'person']) 
+        #                 for sample in self.samples]
         print(person_counts)
         print(f"Total person detections: {sum(person_counts)}")
         print(f"Average persons per image: {sum(person_counts)/len(self.samples):.1f}")
@@ -99,6 +102,8 @@ class FiftyOneCOCODataset(Dataset):
         
         # Filter for person detections
         person_detections = [det for det in sample.ground_truth.detections if det.label == 'person']
+
+        # person_detections = [det for det in sample.detections.detections if det.label == 'person']
         
         for det in person_detections:
             # FiftyOne stores boxes as [x, y, w, h]

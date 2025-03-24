@@ -46,11 +46,16 @@ def visualize_batch(batch, save_dir='test_outputs'):
     images = batch['images']
     boxes = batch['boxes']
     labels = batch['labels']
+
+    # print("boxes!!!", boxes)
     
     for i in range(min(4, len(images))):
         # Convert image back to numpy and denormalize
         img = images[i].permute(1, 2, 0).numpy()
         img = (img * 0.5 + 0.5).clip(0, 1)  # Assuming normalization was done
+        
+        # Get image dimensions
+        height, width = img.shape[:2]
         
         # Create figure
         plt.figure(figsize=(10, 10))
@@ -59,8 +64,12 @@ def visualize_batch(batch, save_dir='test_outputs'):
         # Plot boxes
         valid_boxes = boxes[i][labels[i] != -1]  # Filter padding
         for box in valid_boxes:
+            # Scale coordinates to image dimensions
             x1, y1, x2, y2 = box.tolist()
-            plt.plot([x1, x2, x2, x1, x1], [y1, y1, y2, y2, y1], 'r-')
+            x1, x2 = x1 * width, x2 * width
+            y1, y2 = y1 * height, y2 * height
+            
+            plt.plot([x1, x2, x2, x1, x1], [y1, y1, y2, y2, y1], 'r-', linewidth=2)
         
         plt.axis('off')
         plt.savefig(save_dir / f'sample_{i}.png', bbox_inches='tight', pad_inches=0)

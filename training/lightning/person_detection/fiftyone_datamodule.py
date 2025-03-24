@@ -68,6 +68,7 @@ class FiftyOneCOCODataset(Dataset):
         print(f"Total samples: {len(self.samples)}")
         person_counts = [len([det for det in sample.ground_truth.detections if det.label == 'person']) 
                         for sample in self.samples]
+        print(person_counts)
         print(f"Total person detections: {sum(person_counts)}")
         print(f"Average persons per image: {sum(person_counts)/len(self.samples):.1f}")
         
@@ -89,6 +90,8 @@ class FiftyOneCOCODataset(Dataset):
         
         # Load image
         img = Image.open(sample.filepath).convert('RGB')
+        img = img.resize((640, 640), Image.BILINEAR)
+        img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
         
         # Get detections
         boxes = []
@@ -107,17 +110,6 @@ class FiftyOneCOCODataset(Dataset):
         # Convert to numpy arrays
         boxes = np.array(boxes, dtype=np.float32)
         labels = np.array(labels, dtype=np.int64)
-        
-        # Apply transforms
-        if self.transform:
-            transformed = self.transform(
-                image=np.array(img),
-                bboxes=boxes,
-                labels=labels
-            )
-            img = transformed['image']
-            boxes = np.array(transformed['bboxes'])
-            labels = np.array(transformed['labels'])
         
         # Convert to tensors
         if not isinstance(img, torch.Tensor):
@@ -164,44 +156,11 @@ class FiftyOneCOCODataModule(pl.LightningDataModule):
         self.classes = classes or ['person']  # Default to person detection
         self.img_size = img_size
         
-        # Define transforms
-        self.train_transform = A.Compose([
-            A.RandomResizedCrop(
-                height=img_size,
-                width=img_size,
-                scale=(0.8, 1.0),
-                ratio=(0.8, 1.2),
-            ),
-            A.HorizontalFlip(p=0.5),
-            A.ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.2,
-                hue=0.1,
-                p=0.5
-            ),
-            A.Normalize(),
-            ToTensorV2(),
-        ], bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels']
-        ))
-        
-        self.val_transform = A.Compose([
-            A.Resize(img_size, img_size),
-            A.Normalize(),
-            ToTensorV2(),
-        ], bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels']
-        ))
-        
     def setup(self, stage: Optional[str] = None):
         """Create train/val datasets"""
         if stage == 'fit' or stage is None:
             self.train_dataset = FiftyOneCOCODataset(
                 split='train',
-                transform=self.train_transform,
                 max_samples=self.train_samples,
                 classes=self.classes,
                 shuffle=True
@@ -209,7 +168,6 @@ class FiftyOneCOCODataModule(pl.LightningDataModule):
             
             self.val_dataset = FiftyOneCOCODataset(
                 split='validation',
-                transform=self.val_transform,
                 max_samples=self.val_samples,
                 classes=self.classes,
                 shuffle=True

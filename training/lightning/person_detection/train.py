@@ -1,37 +1,27 @@
 """
-Test script for YOLO face detection training with Lightning and Ultralytics integration.
+Training script for YOLO person detection using COCO dataset with Lightning and Ultralytics integration.
 """
 import os
 import torch
 import pathlib
 import argparse
 import pytorch_lightning as pl
-import torchvision.models as models
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import wandb
 from pathlib import Path
-from ultralytics import YOLO
 
-from lightning.module import YOLOLightningModule
-from lightning.datamodule import YOLOFaceDataModule
-from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
-# from lightning.models import (
-#     CombinedModel,
-#     MultiTaskResNetFeatureExtractor,
-#     CustomYOLO,
-#     CustomAdaFace,
-#     CustomVitPose
-# )
-
-from modify_models import CustomAdaFace, CustomYOLO, CustomVitPose, MultiTaskResNetFeatureExtractor, CombinedModel, create_combined_model
+from .coco_module import COCOYOLOModule
+from .fiftyone_datamodule import FiftyOneCOCODataModule
+from ..callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
+from ...modify_models import create_combined_model
 
 def load_model():
     """Load the combined model with proper error handling"""
     try:
         # Get the path relative to this script
         filepath = Path(__file__).parent.resolve()
-        components_dir = filepath.parent / "edited_components"
+        components_dir = filepath.parent.parent.parent / "edited_components"
         model_path = components_dir / "combined_model.pth"
         
         if not model_path.exists():
@@ -60,16 +50,18 @@ def load_model():
         raise
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train YOLO face detection model')
+    parser = argparse.ArgumentParser(description='Train YOLO person detection model on COCO')
     parser.add_argument('--logging', choices=['none', 'wandb'], default='none', help='Logging method to use')
     parser.add_argument('--learning-rate', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=2, help='Batch size')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
-    parser.add_argument('--img-size', type=int, default=256, help='Image size') # 416
-    parser.add_argument('--workers', type=int, default=2, help='Number of workers')
-    parser.add_argument('--accumulate', type=int, default=8, help='Gradient accumulation steps')
+    parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--img-size', type=int, default=640, help='Image size')
+    parser.add_argument('--workers', type=int, default=4, help='Number of workers')
+    parser.add_argument('--accumulate', type=int, default=4, help='Gradient accumulation steps')
     parser.add_argument('--save-period', type=int, default=1, help='Save checkpoint every N epochs')
     parser.add_argument('--val-check-interval', type=float, default=1.0, help='Validation check interval')
+    parser.add_argument('--train-samples', type=int, default=1000, help='Number of training samples to use')
+    parser.add_argument('--val-samples', type=int, default=200, help='Number of validation samples to use')
     return parser.parse_args()
 
 def main():
@@ -97,8 +89,8 @@ def main():
     if args.logging == 'wandb':
         print("Initializing W&B logging...")
         wandb.init(
-            project="yolo-face-detection",
-            name="training-run",
+            project="yolo-person-detection",
+            name="coco-training-run",
             config=config
         )
         logger = WandbLogger()
@@ -112,22 +104,17 @@ def main():
     if torch.cuda.is_available():
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**2
         print(f"Total GPU Memory: {gpu_memory:.0f}MB")
-        if gpu_memory < 4000:  # Less than 4GB
+        if gpu_memory < 8000:  # Less than 8GB
             print("Limited GPU memory detected. Using memory-efficient settings.")
     
     # Load model
     model = load_model()
     
-    # Setup data configuration
-    filepath = pathlib.Path(__file__).parent.resolve()
-    data_cfg = Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml"))
-    if not data_cfg.exists():
-        raise FileNotFoundError(f"Data config not found at {data_cfg}")
-    
-    # Create Lightning module with Ultralytics integration
-    lightning_model = YOLOLightningModule(
+    # Create Lightning module
+    lightning_model = COCOYOLOModule(
         model=model,
-        data_cfg=str(data_cfg),
+        data_cfg=None,  # Not using YOLO data.yaml format
+        num_classes=80,  # COCO has 80 classes
         learning_rate=config["learning_rate"],
         # Ultralytics specific args
         epochs=config["epochs"],
@@ -139,11 +126,14 @@ def main():
         save_period=config["save_period"],
     )
     
-    # Create data module
-    data_module = YOLOFaceDataModule(
-        data_dir=str(data_cfg.parent),
+    # Create data module with FiftyOne
+    data_module = FiftyOneCOCODataModule(
         batch_size=config["batch_size"],
         num_workers=config["workers"],
+        train_samples=args.train_samples,
+        val_samples=args.val_samples,
+        classes=['person'],  # Focus on person detection
+        img_size=config["img_size"],
     )
     
     # Setup callbacks
@@ -152,7 +142,7 @@ def main():
         YOLOModelCheckpoint(save_path="checkpoints"),
         ModelCheckpoint(
             dirpath="checkpoints",
-            filename="yolo-face-{epoch:02d}-{val_mAP50-95:.2f}",
+            filename="yolo-coco-{epoch:02d}-{val_mAP50-95:.2f}",
             monitor="val/mAP50-95",
             mode="max",
             save_top_k=3,
@@ -160,7 +150,7 @@ def main():
         )
     ]
     
-    # Setup trainer with optional W&B logger
+    # Setup trainer
     trainer_kwargs = {
         'max_epochs': config["epochs"],
         'accelerator': "gpu" if torch.cuda.is_available() else "cpu",
@@ -171,7 +161,7 @@ def main():
         'gradient_clip_val': 0.1,
         'accumulate_grad_batches': config["accumulate"],
         'log_every_n_steps': 10,
-        'logger': logger,  # This will be None if not using W&B
+        'logger': logger,
     }
     
     # Create trainer
@@ -183,7 +173,7 @@ def main():
             memory_allocated = torch.cuda.memory_allocated(0) / 1024**2
             memory_reserved = torch.cuda.memory_reserved(0) / 1024**2
             print(f"GPU Memory: Allocated={memory_allocated:.0f}MB, Reserved={memory_reserved:.0f}MB")
-            if memory_allocated > 2500:  # Over 2.5GB
+            if memory_allocated > 6000:  # Over 6GB
                 print("WARNING: High GPU memory usage detected!")
     
     # Train model
@@ -216,7 +206,7 @@ def main():
         
         # Save final model state
         if trainer.global_rank == 0:  # Save only on main process
-            save_path = Path("checkpoints/final_model.pt")
+            save_path = Path("checkpoints/final_coco_model.pt")
             save_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 save_dict = {

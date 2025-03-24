@@ -5,9 +5,9 @@ import pytorch_lightning as pl
 import torch
 from torch.optim import Adam
 from ultralytics.utils.metrics import DetMetrics
-from .ultralytics_wrapper import UltralyticsTrainerWrapper
+from ..ultralytics_wrapper import UltralyticsTrainerWrapper
 from ultralytics.cfg import get_cfg
-from .utils import compute_iou as box_iou
+from ..utils import compute_iou as box_iou
 
 class YOLOLightningModule(pl.LightningModule):
     def __init__(

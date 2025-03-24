@@ -13,6 +13,7 @@
         "maxpool",
         "numpy",
         "omegaconf",
+        "pycocotools",
         "setuptools",
         "statedict",
         "tqdm",

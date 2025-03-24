@@ -13,6 +13,8 @@ accelerate>=0.26.0
 pytorch-lightning
 wandb
 albumentations
+pycocotools
+fiftyone
 
 # ViTPose
 # git+https://github.com/ViTAE-Transformer/ViTPose

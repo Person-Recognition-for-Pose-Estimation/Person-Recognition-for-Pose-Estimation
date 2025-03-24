@@ -12,9 +12,9 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
-from training_ultra.modify_models import create_combined_model
-from training_ultra.lightning.module import YOLOLightningModule
-from training_ultra.lightning.ultralytics_wrapper import UltralyticsTrainerWrapper
+from training.modify_models import create_combined_model
+from training.lightning.face_detection.module import YOLOLightningModule
+from training.lightning.ultralytics_wrapper import UltralyticsTrainerWrapper
 
 class TestYOLOLightning(unittest.TestCase):
     @classmethod

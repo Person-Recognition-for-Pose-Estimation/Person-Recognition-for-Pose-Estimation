@@ -107,8 +107,8 @@ class ViTPoseLightningModule(pl.LightningModule):
         """Forward pass"""
         return self.model(x)
         
-    def _get_keypoints_from_heatmaps(self, heatmaps: torch.Tensor) -> torch.Tensor:
-        """Extract keypoint coordinates from heatmaps.
+    def _get_keypoints_from_heatmaps(self, heatmaps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Extract keypoint coordinates from heatmaps using UDP.
         
         Args:
             heatmaps: [B, K, H, W] Predicted heatmaps
@@ -119,26 +119,59 @@ class ViTPoseLightningModule(pl.LightningModule):
         """
         B, K, H, W = heatmaps.shape
         
-        # Reshape and find max values
-        heatmaps_reshaped = heatmaps.reshape(B, K, -1)
-        max_vals, max_idx = heatmaps_reshaped.max(dim=2)
+        # Apply softmax to convert heatmap to probability distribution
+        heatmaps_softmax = heatmaps.reshape(B, K, -1)
+        heatmaps_softmax = torch.nn.functional.softmax(heatmaps_softmax, dim=2)
+        heatmaps = heatmaps_softmax.reshape(B, K, H, W)
         
-        # Convert indices to x,y coordinates in pixel space
-        max_idx = max_idx.float()
-        x = (max_idx % W)
-        y = (max_idx // W)
+        # Create coordinate grids
+        y_grid, x_grid = torch.meshgrid(
+            torch.arange(H, dtype=heatmaps.dtype, device=heatmaps.device),
+            torch.arange(W, dtype=heatmaps.dtype, device=heatmaps.device),
+            indexing='ij'
+        )
+        
+        # Compute expected coordinates (soft-argmax)
+        x_coords = []
+        y_coords = []
+        scores = []
+        
+        for b in range(B):
+            for k in range(K):
+                heatmap = heatmaps[b, k]  # [H, W]
+                
+                # Get score as max probability
+                score = heatmap.max()
+                scores.append(score)
+                
+                # Calculate expected x coordinate
+                x_exp = (heatmap * x_grid).sum() / (heatmap.sum() + 1e-6)
+                # Calculate expected y coordinate
+                y_exp = (heatmap * y_grid).sum() / (heatmap.sum() + 1e-6)
+                
+                # Apply UDP: unbiased decoding considering discretization error
+                x_exp = x_exp + 0.5
+                y_exp = y_exp + 0.5
+                
+                x_coords.append(x_exp)
+                y_coords.append(y_exp)
+        
+        # Stack and reshape results
+        x_coords = torch.stack(x_coords).reshape(B, K)
+        y_coords = torch.stack(y_coords).reshape(B, K)
+        scores = torch.stack(scores).reshape(B, K)
         
         # Normalize coordinates to [0,1] range
-        x = x / W
-        y = y / H
+        x_coords = x_coords / W
+        y_coords = y_coords / H
         
         # Stack coordinates
-        coords = torch.stack([x, y], dim=-1)  # [B, K, 2]
+        coords = torch.stack([x_coords, y_coords], dim=-1)  # [B, K, 2]
         
-        return coords, max_vals
+        return coords, scores
     
     def _generate_target_heatmap(self, keypoints, visibility, size):
-        """Generate target heatmap from keypoint coordinates.
+        """Generate target heatmap from keypoint coordinates using UDP.
         
         Args:
             keypoints: [B, N, K, 2] tensor of keypoint coordinates (normalized)
@@ -157,39 +190,65 @@ class ViTPoseLightningModule(pl.LightningModule):
         heatmaps = torch.zeros((B, K, H, W), device=device)
         weights = torch.zeros((B, K), device=device)
         
-        # Convert normalized coordinates to pixel coordinates
+        # Convert normalized coordinates to pixel coordinates with UDP offset
         keypoints = keypoints.clone()
-        keypoints[..., 0] *= W
-        keypoints[..., 1] *= H
+        keypoints[..., 0] = keypoints[..., 0] * W - 0.5
+        keypoints[..., 1] = keypoints[..., 1] * H - 0.5
         
         # Create coordinate grid
         x = torch.arange(W, device=device)
         y = torch.arange(H, device=device)
         yy, xx = torch.meshgrid(y, x, indexing='ij')
+        xx = xx.float()
+        yy = yy.float()
+        
+        # Adaptive sigma based on keypoint scale
+        # This helps handle different scales of people in the image
+        base_sigma = self.sigma
         
         # Generate heatmaps for each batch and instance
         for b in range(B):
             for n in range(N):
+                # Calculate person scale from bounding box or keypoint spread
+                kpts_visible = visibility[b, n] > 0
+                if kpts_visible.any():
+                    visible_kpts = keypoints[b, n][kpts_visible]
+                    xmax, ymax = visible_kpts.max(dim=0)[0]
+                    xmin, ymin = visible_kpts.min(dim=0)[0]
+                    person_scale = ((xmax - xmin) * (ymax - ymin)).sqrt()
+                    # Adjust sigma based on person scale
+                    adaptive_sigma = base_sigma * max(1.0, person_scale / 200.0)
+                else:
+                    adaptive_sigma = base_sigma
+                
                 for k in range(K):
                     if visibility[b, n, k] > 0:  # Keypoint is labeled
                         mu_x, mu_y = keypoints[b, n, k]
                         
-                        # Compute Gaussian
+                        # Compute Gaussian with UDP
                         gaussian = torch.exp(
-                            -((xx - mu_x)**2 + (yy - mu_y)**2) / (2 * self.sigma**2)
+                            -((xx - mu_x)**2 + (yy - mu_y)**2) / (2 * adaptive_sigma**2)
                         )
                         
                         # Add to heatmap (take maximum in case of multiple instances)
                         heatmaps[b, k] = torch.maximum(heatmaps[b, k], gaussian)
                         
                         # Update weight (1 for visible, 0.5 for occluded)
-                        weights[b, k] = max(weights[b, k], 
-                                         1.0 if visibility[b, n, k] == 2 else 0.5)
+                        # Also consider the keypoint type importance
+                        base_weight = 1.0 if visibility[b, n, k] == 2 else 0.5
+                        weights[b, k] = max(weights[b, k], base_weight)
+        
+        # Apply additional UDP processing
+        # 1. Normalize heatmaps
+        heatmaps = heatmaps / (heatmaps.sum(dim=(-2, -1), keepdim=True) + 1e-6)
+        
+        # 2. Apply threshold to reduce noise
+        heatmaps = torch.where(heatmaps > 0.005, heatmaps, torch.zeros_like(heatmaps))
         
         return heatmaps, weights
     
     def training_step(self, batch, batch_idx):
-        """Single training step"""
+        """Single training step with UDP and adaptive weighting"""
         # Get inputs and targets
         images = batch['images']
         keypoints = batch['keypoints']  # [B, N, K, 3] - N instances, K keypoints, 3 = (x, y, visibility)
@@ -199,7 +258,7 @@ class ViTPoseLightningModule(pl.LightningModule):
         coords = keypoints[..., :2]  # [B, N, K, 2]
         visibility = keypoints[..., 2]  # [B, N, K]
         
-        # Generate target heatmaps and weights
+        # Generate target heatmaps and weights with UDP
         target_heatmaps, target_weights = self._generate_target_heatmap(
             coords, visibility, self.heatmap_size
         )
@@ -207,13 +266,48 @@ class ViTPoseLightningModule(pl.LightningModule):
         # Forward pass through backbone and pose branch
         pred_heatmaps = self.model(images)
         
-        # Compute loss
-        loss = self.criterion(pred_heatmaps, target_heatmaps, target_weights)
+        # Apply online hard example mining (OHEM)
+        B, K, H, W = pred_heatmaps.shape
+        pred_reshaped = pred_heatmaps.reshape(B, K, -1)
+        target_reshaped = target_heatmaps.reshape(B, K, -1)
         
-        # Log metrics
-        self.log('train_loss', loss, prog_bar=True)
+        # Calculate per-pixel losses
+        pixel_losses = torch.nn.functional.mse_loss(
+            pred_reshaped, target_reshaped, reduction='none'
+        ).mean(dim=2)  # [B, K]
         
-        return loss
+        # Sort losses and keep top 60% hard examples
+        num_keep = int(0.6 * K)
+        _, hard_indices = torch.topk(pixel_losses, k=num_keep, dim=1)
+        
+        # Update target weights for hard examples
+        hard_weights = torch.zeros_like(target_weights)
+        for b in range(B):
+            hard_weights[b, hard_indices[b]] = target_weights[b, hard_indices[b]] * 2.0
+        
+        # Compute final loss with hard example mining
+        loss = self.criterion(pred_heatmaps, target_heatmaps, hard_weights)
+        
+        # Add regularization for heatmap smoothness
+        smoothness_loss = torch.nn.functional.smooth_l1_loss(
+            pred_heatmaps[:, :, 1:, :], pred_heatmaps[:, :, :-1, :], reduction='mean'
+        ) + torch.nn.functional.smooth_l1_loss(
+            pred_heatmaps[:, :, :, 1:], pred_heatmaps[:, :, :, :-1], reduction='mean'
+        )
+        
+        total_loss = loss + 0.1 * smoothness_loss
+        
+        # Log detailed metrics
+        self.log('train/heatmap_loss', loss, prog_bar=True)
+        self.log('train/smoothness_loss', smoothness_loss, prog_bar=False)
+        self.log('train/total_loss', total_loss, prog_bar=True)
+        
+        # Log learning rate
+        if self.trainer is not None:
+            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+            self.log('train/learning_rate', current_lr, prog_bar=False)
+        
+        return total_loss
     
     def on_validation_epoch_start(self):
         """Clear stored predictions at the start of validation.
@@ -239,8 +333,17 @@ class ViTPoseLightningModule(pl.LightningModule):
         """
         self.eval_predictions = []
 
+    def _flip_heatmaps(self, heatmaps: torch.Tensor, flip_pairs: List[Tuple[int, int]]) -> torch.Tensor:
+        """Flip heatmaps horizontally and swap paired keypoints."""
+        flipped_heatmaps = torch.flip(heatmaps, dims=[-1])  # Flip horizontally
+        
+        for left, right in flip_pairs:
+            flipped_heatmaps[:, [left, right]] = flipped_heatmaps[:, [right, left]]
+            
+        return flipped_heatmaps
+    
     def validation_step(self, batch, batch_idx):
-        """Single validation step.
+        """Single validation step with flip test and OKS-based evaluation.
         
         Args:
             batch: Dictionary containing:
@@ -261,14 +364,30 @@ class ViTPoseLightningModule(pl.LightningModule):
             raise KeyError(f"Batch is missing required keys: {missing_keys}")
             
         images = batch['images']
-        keypoints = batch['keypoints']  # [B, N, K, 3] - N instances, K keypoints, 3 = (x, y, visibility)
-        masks = batch['masks']  # [B, N] boolean mask for valid instances
-        image_ids = batch['image_ids']  # COCO image IDs
-        boxes = batch['boxes']  # [B, N, 4] person bounding boxes
+        keypoints = batch['keypoints']  # [B, N, K, 3]
+        masks = batch['masks']  # [B, N]
+        image_ids = batch['image_ids']
+        boxes = batch['boxes']  # [B, N, 4]
         
         try:
-            # Forward pass
-            pred_heatmaps = self.model(images)
+            # Forward pass with flip test
+            with torch.no_grad():
+                # Original forward pass
+                pred_heatmaps = self.model(images)
+                
+                # Flipped forward pass
+                flipped_images = torch.flip(images, dims=[-1])
+                flipped_heatmaps = self.model(flipped_images)
+                
+                # Process flipped heatmaps
+                flip_pairs = [  # COCO keypoint flip pairs
+                    (1, 2), (3, 4), (5, 6), (7, 8), (9, 10),
+                    (11, 12), (13, 14), (15, 16)
+                ]
+                flipped_heatmaps = self._flip_heatmaps(flipped_heatmaps, flip_pairs)
+                
+                # Average predictions
+                pred_heatmaps = (pred_heatmaps + flipped_heatmaps) * 0.5
             
             # Get predicted keypoint coordinates and scores
             pred_coords, pred_scores = self._get_keypoints_from_heatmaps(pred_heatmaps)
@@ -282,37 +401,47 @@ class ViTPoseLightningModule(pl.LightningModule):
             loss = self.criterion(pred_heatmaps, target_heatmaps, target_weights)
             self.log('val_loss', loss, prog_bar=True)
             
-            # Store predictions in COCO format for evaluation
+            # Store predictions with OKS-based filtering
+            sigmas = torch.tensor([  # COCO keypoint sigmas for OKS computation
+                .026, .025, .025, .035, .035, .079, .079, .072, .072, .062, .062,
+                .107, .107, .087, .087, .089, .089
+            ], device=pred_coords.device)
+            
             batch_size = len(image_ids)
             for b in range(batch_size):
-                valid_instances = masks[b]  # [N] boolean mask
+                valid_instances = masks[b]
                 num_instances = valid_instances.sum().item()
                 
                 for n in range(num_instances):
-                    # Get instance keypoints and box
+                    # Get instance predictions
                     kpts = pred_coords[b, n]  # [K, 2]
                     scores = pred_scores[b, n]  # [K]
                     box = boxes[b, n]  # [4]
                     
-                    # Convert to COCO format
-                    # COCO keypoint format: [x1,y1,v1,x2,y2,v2,...]
-                    keypoints_coco = []
-                    for kpt, score in zip(kpts, scores):
-                        x, y = kpt.cpu().numpy()
-                        # Set visibility based on confidence score
-                        v = 2 if score > 0.3 else 1  # 2: visible, 1: not visible
-                        keypoints_coco.extend([x, y, v])
+                    # Compute OKS-based confidence
+                    box_area = box[2] * box[3]  # width * height
+                    d = torch.sqrt(box_area)  # scale
+                    oks_scores = torch.exp(-kpts.square().sum(dim=1) / (2 * d * d * sigmas * sigmas))
+                    instance_score = (oks_scores * scores).mean()
                     
-                    # Create prediction entry
-                    pred = {
-                        'image_id': image_ids[b].item(),  # Ensure it's a Python number
-                        'category_id': 1,  # person category
-                        'keypoints': keypoints_coco,
-                        'score': scores.mean().item(),  # keypoint score
-                        'bbox': box.cpu().numpy().tolist()  # [x, y, w, h]
-                    }
-                    
-                    self.eval_predictions.append(pred)
+                    # Only keep predictions with good OKS scores
+                    if instance_score > self.keypoint_thresh:
+                        # Convert to COCO format
+                        keypoints_coco = []
+                        for kpt, score in zip(kpts, scores):
+                            x, y = kpt.cpu().numpy()
+                            v = 2 if score > self.keypoint_thresh else 1
+                            keypoints_coco.extend([x, y, v])
+                        
+                        pred = {
+                            'image_id': image_ids[b].item(),
+                            'category_id': 1,  # person
+                            'keypoints': keypoints_coco,
+                            'score': instance_score.item(),
+                            'bbox': box.cpu().numpy().tolist()
+                        }
+                        
+                        self.eval_predictions.append(pred)
                     
             return loss
             

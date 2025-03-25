@@ -41,9 +41,8 @@ from lightning.face_detection.datamodule import YOLOFaceDataModule
 from lightning.person_detection.coco_module import COCOYOLOModule
 from lightning.person_detection.coco_datamodule import COCOYOLODataModule
 
-# TODO: Import face recognition modules once implemented
-# from lightning.face_recognition.module import AdaFaceLightningModule
-# from lightning.face_recognition.datamodule import FaceRecognitionDataModule
+from lightning.face_recognition.module import AdaFaceLightningModule
+from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
 # TODO: Import pose estimation modules once implemented
 # from lightning.pose_estimation.module import VitPoseLightningModule
@@ -233,9 +232,27 @@ def main():
     parser.add_argument('--coco-val-img-dir', type=str, required=True,
                       help='Path to COCO validation images directory')
     
-    # TODO: Add Face Recognition arguments once implemented
-    # parser.add_argument('--face-train-dir', type=str,
-    #                   help='Path to face recognition training directory')
+    # Face Recognition arguments
+    parser.add_argument('--face-train-rec', type=str,
+                      help='Path to face recognition training .rec file')
+    parser.add_argument('--face-train-idx', type=str,
+                      help='Path to face recognition training .idx file')
+    parser.add_argument('--face-val-rec', type=str,
+                      help='Path to face recognition validation .rec file')
+    parser.add_argument('--face-val-idx', type=str,
+                      help='Path to face recognition validation .idx file')
+    parser.add_argument('--face-num-classes', type=int, default=70722,
+                      help='Number of identity classes in face recognition dataset')
+    parser.add_argument('--face-embedding-size', type=int, default=512,
+                      help='Size of face embeddings')
+    parser.add_argument('--face-margin', type=float, default=0.4,
+                      help='Margin for AdaFace loss')
+    parser.add_argument('--face-norm-multiplier', type=float, default=0.333,
+                      help='Norm multiplier for AdaFace')
+    parser.add_argument('--face-scale', type=float, default=64.0,
+                      help='Scale for AdaFace')
+    parser.add_argument('--face-ema-decay', type=float, default=0.01,
+                      help='EMA decay rate for AdaFace batch statistics')
     # parser.add_argument('--face-val-dir', type=str,
     #                   help='Path to face recognition validation directory')
     
@@ -312,25 +329,31 @@ def main():
             wandb_project="yolo-person-detection"
         ),
         
-        # TODO: Add Face Recognition Task once implemented
-        # Expected configuration:
-        # TaskConfig(
-        #     name="face_recognition",
-        #     module_class=AdaFaceLightningModule,
-        #     datamodule_class=FaceRecognitionDataModule,
-        #     data_config={
-        #         "train_dir": "path/to/train",
-        #         "val_dir": "path/to/val",
-        #         "batch_size": args.batch_size,
-        #         "num_workers": base_config["workers"],
-        #     },
-        #     module_config={
-        #         "learning_rate": args.learning_rate,
-        #         "embedding_size": 512,
-        #         ...
-        #     },
-        #     wandb_project="face-recognition"
-        # ),
+        # Face Recognition Task
+        TaskConfig(
+            name="face_recognition",
+            module_class=AdaFaceLightningModule,
+            datamodule_class=FaceRecognitionDataModule,
+            data_config={
+                "data_dir": os.path.dirname(args.face_train_rec),
+                "train_rec": os.path.basename(args.face_train_rec),
+                "train_idx": os.path.basename(args.face_train_idx),
+                "val_rec": os.path.basename(args.face_val_rec),
+                "val_idx": os.path.basename(args.face_val_idx),
+                "batch_size": args.batch_size,
+                "num_workers": base_config["workers"],
+            },
+            module_config={
+                "num_classes": args.face_num_classes,
+                "embedding_size": args.face_embedding_size,
+                "learning_rate": args.learning_rate,
+                "m": args.face_margin,
+                "h": args.face_norm_multiplier,
+                "s": args.face_scale,
+                "t_alpha": args.face_ema_decay,
+            },
+            wandb_project="adaface-recognition"
+        ),
         
         # TODO: Add Pose Estimation Task once implemented
         # Expected configuration:

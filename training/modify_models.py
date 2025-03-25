@@ -191,7 +191,9 @@ class Config:
     def __init__(self):
         self.arch = 'ir_50'
         self.head = 'adaface'
-        self.num_classes = 1000  # Update this based on your dataset
+        self.num_classes = 70722
+        self.embedding_size: int = 512,
+        self.backbone_channels: int = 2048,
         self.m = 0.4
         self.h = 0.333
         self.t_alpha = 0.01
@@ -207,6 +209,7 @@ def create_adaface_branch(
     device: str = 'cpu'
 ) -> CustomAdaFace:
     """Create AdaFace branch for face recognition."""
+    
     config = Config()
     ada_face_model_path = component_models_dir / "adaface_ir50_ms1mv2.ckpt"
     face_rec_branch = CustomAdaFace(str(ada_face_model_path), config)
@@ -346,7 +349,7 @@ class CombinedModel(nn.Module):
         self.vit_pose = vit_pose
 
     def set_task(self, task_name):
-        supported_tasks = ['face_detection', 'person_detection', 'pose_estimation', 'face_identification']
+        supported_tasks = ['face_detection', 'person_detection', 'pose_estimation', 'face_recognition']
         if task_name not in supported_tasks:
             raise ValueError(f"Task {task_name} not supported. Available tasks: {', '.join(supported_tasks)}")
         self.current_task = task_name
@@ -362,7 +365,7 @@ class CombinedModel(nn.Module):
             return self.yolo_person(features)
         elif self.current_task == 'face_detection':
             return self.yolo_face(features)
-        else:  # face_identification
+        else:  # face_recognition
             return self.ada_face(features)
 
 

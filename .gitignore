@@ -12,3 +12,12 @@ dataset_folders/
 !dataset_folders/ada_face/.gitkeep
 
 z_notes/
+wandb/
+lightning_logs/
+logs/
+checkpoints/
+
+training/lightning/person_detection/coco_datamodule.py
+training/lightning/person_detection/online_datamodule.py
+
+test_outputs/*

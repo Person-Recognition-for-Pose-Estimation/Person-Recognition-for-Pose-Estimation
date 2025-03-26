@@ -118,8 +118,28 @@ from head_adaface import build_head
 
 
 class CustomAdaFace(nn.Module):
-    def __init__(self, pretrained_path, config):
+    def __init__(self, pretrained_path, config, backbone_channels=2048):
         super(CustomAdaFace, self).__init__()
+        
+        # Define adapter network
+        self.adapter = nn.Sequential(
+            # Initial channel reduction and processing
+            nn.Conv2d(backbone_channels, 256, kernel_size=1),
+            nn.BatchNorm2d(256),
+            nn.PReLU(256),  # AdaFace uses PReLU
+            
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.PReLU(128),
+            
+            # Adaptive pooling to get consistent spatial dimensions
+            nn.AdaptiveAvgPool2d((112, 112)),  # Common input size for face recognition
+            
+            # Final adaptation to match AdaFace input
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.PReLU(64)
+        )
         
         # Load the complete pre-trained AdaFace model
         self.adaface_model = build_model(model_name=config.arch)
@@ -132,18 +152,13 @@ class CustomAdaFace(nn.Module):
 
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
-        
         # Load weights except for input layer
         filtered_state_dict = {k: v for k, v in state_dict.items() 
                              if not k.startswith('input_layer')}
         self.adaface_model.load_state_dict(filtered_state_dict, strict=False)
         
-        # Replace input layer with an adapter that takes backbone features
+        # Replace input layer with a simpler one since adapter already did most processing
         self.adaface_model.input_layer = nn.Sequential(
-            nn.Conv2d(2048, 64, kernel_size=1),  # First reduce channels
-            nn.BatchNorm2d(64),
-            nn.PReLU(64),  # AdaFace uses PReLU
-            # Additional layers to match the processing of original input_layer
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.PReLU(64)
@@ -161,6 +176,9 @@ class CustomAdaFace(nn.Module):
         )
     
     def forward(self, x, labels=None):
+        # Pass through adapter first
+        x = self.adapter(x)
+        
         # Forward through modified AdaFace model
         embeddings, norms = self.adaface_model(x)
         
@@ -173,7 +191,9 @@ class Config:
     def __init__(self):
         self.arch = 'ir_50'
         self.head = 'adaface'
-        self.num_classes = 1000  # Update this based on your dataset
+        self.num_classes = 70722
+        self.embedding_size: int = 512,
+        self.backbone_channels: int = 2048,
         self.m = 0.4
         self.h = 0.333
         self.t_alpha = 0.01
@@ -189,6 +209,7 @@ def create_adaface_branch(
     device: str = 'cpu'
 ) -> CustomAdaFace:
     """Create AdaFace branch for face recognition."""
+    
     config = Config()
     ada_face_model_path = component_models_dir / "adaface_ir50_ms1mv2.ckpt"
     face_rec_branch = CustomAdaFace(str(ada_face_model_path), config)
@@ -328,7 +349,7 @@ class CombinedModel(nn.Module):
         self.vit_pose = vit_pose
 
     def set_task(self, task_name):
-        supported_tasks = ['face_detection', 'person_detection', 'pose_estimation', 'face_identification']
+        supported_tasks = ['face_detection', 'person_detection', 'pose_estimation', 'face_recognition']
         if task_name not in supported_tasks:
             raise ValueError(f"Task {task_name} not supported. Available tasks: {', '.join(supported_tasks)}")
         self.current_task = task_name
@@ -344,7 +365,7 @@ class CombinedModel(nn.Module):
             return self.yolo_person(features)
         elif self.current_task == 'face_detection':
             return self.yolo_face(features)
-        else:  # face_identification
+        else:  # face_recognition
             return self.ada_face(features)
 
 

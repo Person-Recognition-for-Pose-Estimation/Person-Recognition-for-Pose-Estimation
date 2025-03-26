@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import logging
 
 # Detection modules
-from lightning.face_detection.module import YOLOLightningModule as FaceYOLOModule
+from lightning.face_detection.module import FaceYOLOModule
 from lightning.face_detection.datamodule import YOLOFaceDataModule
 from lightning.person_detection.coco_module import COCOYOLOModule
 from lightning.person_detection.coco_datamodule import COCOYOLODataModule
@@ -44,9 +44,8 @@ from lightning.person_detection.coco_datamodule import COCOYOLODataModule
 from lightning.face_recognition.module import AdaFaceLightningModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
-# TODO: Import pose estimation modules once implemented
-# from lightning.pose_estimation.module import VitPoseLightningModule
-# from lightning.pose_estimation.datamodule import PoseEstimationDataModule
+from lightning.pose_estimation.module import ViTPoseLightningModule
+from lightning.pose_estimation.fiftyone_datamodule import FiftyOneCOCOKeypointDataModule
 
 from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
 from modify_models import create_combined_model
@@ -218,19 +217,19 @@ def main():
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--learning-rate', type=float, default=0.001)
     
-    # Face detection arguments
-    parser.add_argument('--face-data-cfg', type=str, required=True,
+    # # Face detection arguments
+    parser.add_argument('--face-data-cfg', type=str,
                       help='Path to YOLO format data config for face detection')
     
-    # Person detection arguments
-    parser.add_argument('--coco-train-path', type=str, required=True,
-                      help='Path to COCO train annotations')
-    parser.add_argument('--coco-val-path', type=str, required=True,
-                      help='Path to COCO validation annotations')
-    parser.add_argument('--coco-train-img-dir', type=str, required=True,
-                      help='Path to COCO train images directory')
-    parser.add_argument('--coco-val-img-dir', type=str, required=True,
-                      help='Path to COCO validation images directory')
+    # # Person detection arguments
+    # parser.add_argument('--coco-train-path', type=str, required=True,
+    #                   help='Path to COCO train annotations')
+    # parser.add_argument('--coco-val-path', type=str, required=True,
+    #                   help='Path to COCO validation annotations')
+    # parser.add_argument('--coco-train-img-dir', type=str, required=True,
+    #                   help='Path to COCO train images directory')
+    # parser.add_argument('--coco-val-img-dir', type=str, required=True,
+    #                   help='Path to COCO validation images directory')
     
     # Face Recognition arguments
     parser.add_argument('--face-train-rec', type=str,
@@ -256,13 +255,23 @@ def main():
     # parser.add_argument('--face-val-dir', type=str,
     #                   help='Path to face recognition validation directory')
     
-    # TODO: Add Pose Estimation arguments once implemented
-    # parser.add_argument('--pose-train-annotations', type=str,
-    #                   help='Path to pose estimation training annotations')
-    # parser.add_argument('--pose-val-annotations', type=str,
-    #                   help='Path to pose estimation validation annotations')
+    # Pose Estimation arguments
+    parser.add_argument('--pose-train-samples', type=int, default=1000,
+                      help='Number of training samples for pose estimation')
+    parser.add_argument('--pose-val-samples', type=int, default=200,
+                      help='Number of validation samples for pose estimation')
+    parser.add_argument('--pose-img-size', type=int, default=256,
+                      help='Image size for pose estimation')
+    parser.add_argument('--pose-sigma', type=float, default=2.0,
+                      help='Gaussian sigma for heatmap generation')
+    parser.add_argument('--pose-keypoint-thresh', type=float, default=0.3,
+                      help='Confidence threshold for keypoint visibility')
     args = parser.parse_args()
-    
+
+    if args.face_data_cfg is None:
+        filepath = pathlib.Path(__file__).parent.resolve()
+        args.face_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
+
     # Base configuration
     base_config = {
         "batch_size": args.batch_size,
@@ -282,7 +291,7 @@ def main():
             module_class=FaceYOLOModule,
             datamodule_class=YOLOFaceDataModule,
             data_config={
-                "data_dir": str(Path(args.face_data_cfg).parent),
+                "data_dir": args.face_data_cfg,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
             },
@@ -306,10 +315,10 @@ def main():
             module_class=COCOYOLOModule,
             datamodule_class=COCOYOLODataModule,
             data_config={
-                "train_path": args.coco_train_path,
-                "val_path": args.coco_val_path,
-                "train_img_dir": args.coco_train_img_dir,
-                "val_img_dir": args.coco_val_img_dir,
+                # "train_path": args.coco_train_path,
+                # "val_path": args.coco_val_path,
+                # "train_img_dir": args.coco_train_img_dir,
+                # "val_img_dir": args.coco_val_img_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
                 "img_size": 640,
@@ -355,25 +364,27 @@ def main():
             wandb_project="adaface-recognition"
         ),
         
-        # TODO: Add Pose Estimation Task once implemented
-        # Expected configuration:
-        # TaskConfig(
-        #     name="pose_estimation",
-        #     module_class=VitPoseLightningModule,
-        #     datamodule_class=PoseEstimationDataModule,
-        #     data_config={
-        #         "train_annotations": "path/to/train.json",
-        #         "val_annotations": "path/to/val.json",
-        #         "batch_size": args.batch_size,
-        #         "num_workers": base_config["workers"],
-        #     },
-        #     module_config={
-        #         "learning_rate": args.learning_rate,
-        #         "num_keypoints": 17,  # For COCO pose format
-        #         ...
-        #     },
-        #     wandb_project="pose-estimation"
-        # ),
+        # Pose Estimation Task
+        TaskConfig(
+            name="pose_estimation",
+            module_class=ViTPoseLightningModule,
+            datamodule_class=FiftyOneCOCOKeypointDataModule,
+            data_config={
+                "batch_size": args.batch_size,
+                "num_workers": base_config["workers"],
+                "train_samples": args.pose_train_samples,
+                "val_samples": args.pose_val_samples,
+                "img_size": args.pose_img_size,
+            },
+            module_config={
+                "learning_rate": args.learning_rate,
+                "weight_decay": base_config.get("weight_decay", 0.0005),
+                "heatmap_size": (args.pose_img_size // 4, args.pose_img_size // 4),  # ViTPose default downscaling
+                "sigma": args.pose_sigma,
+                "keypoint_thresh": args.pose_keypoint_thresh,
+            },
+            wandb_project="pose-estimation"
+        ),
     ]
     
     # Load model

@@ -13,7 +13,7 @@ if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
 from training.modify_models import create_combined_model
-from training.lightning.face_detection.module import YOLOLightningModule
+from training.lightning.face_detection.module import FaceYOLOModule
 from training.lightning.ultralytics_wrapper import UltralyticsTrainerWrapper
 
 class TestYOLOLightning(unittest.TestCase):
@@ -64,7 +64,7 @@ names:
   0: face
                 """.strip())
                 
-        cls.lightning_module = YOLOLightningModule(
+        cls.lightning_module = FaceYOLOModule(
             model=cls.model,
             data_cfg=str(data_cfg)
         )

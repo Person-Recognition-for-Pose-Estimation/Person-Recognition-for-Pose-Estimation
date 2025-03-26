@@ -1,6 +1,9 @@
 """
 DataModule for YOLO face detection training.
 """
+import os
+from pathlib import Path
+import pathlib
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from ultralytics.data.dataset import YOLODataset
@@ -9,7 +12,7 @@ from ultralytics.utils.torch_utils import torch_distributed_zero_first
 class YOLOFaceDataModule(LightningDataModule):
     def __init__(
         self,
-        data_dir: str = "/workspace/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face",
+        data_dir: str,
         batch_size: int = 16,
         num_workers: int = 4,
         pin_memory: bool = True

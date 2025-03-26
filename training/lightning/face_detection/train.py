@@ -13,7 +13,7 @@ import wandb
 from pathlib import Path
 from ultralytics import YOLO
 
-from lightning.face_detection.module import YOLOLightningModule
+from lightning.face_detection.module import FaceYOLOModule
 from lightning.face_detection.datamodule import YOLOFaceDataModule
 from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
 # from lightning.models import (
@@ -125,7 +125,7 @@ def main():
         raise FileNotFoundError(f"Data config not found at {data_cfg}")
     
     # Create Lightning module with Ultralytics integration
-    lightning_model = YOLOLightningModule(
+    lightning_model = FaceYOLOModule(
         model=model,
         data_cfg=str(data_cfg),
         learning_rate=config["learning_rate"],

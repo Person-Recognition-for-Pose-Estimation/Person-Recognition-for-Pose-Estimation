@@ -1,11 +1,9 @@
 """
 Round-robin trainer for multi-task learning that alternates between different tasks.
 
-Current Tasks:
+Tasks:
 - Face Detection: YOLO-based face detection
 - Person Detection: YOLO-based person detection using COCO dataset
-
-Future Tasks (TODO):
 - Face Recognition: AdaFace-based face recognition and embedding
 - Pose Estimation: ViTPose-based human pose estimation
 
@@ -180,7 +178,7 @@ class RoundRobinTrainer:
                     trainer.fit(
                         trainer.lightning_module,
                         data_module,
-                        ckpt_path=None  # Don't resume, we manage state
+                        ckpt_path=None  # Don't resume for now
                     )
                     
                     # Save combined model state
@@ -218,7 +216,7 @@ def main():
     parser.add_argument('--learning-rate', type=float, default=0.001)
     
     # # Face detection arguments
-    parser.add_argument('--face-data-cfg', type=str,
+    parser.add_argument('--face-det-data-cfg', type=str,
                       help='Path to YOLO format data config for face detection')
     
     # # Person detection arguments
@@ -232,26 +230,28 @@ def main():
     #                   help='Path to COCO validation images directory')
     
     # Face Recognition arguments
-    parser.add_argument('--face-train-rec', type=str,
+    parser.add_argument('--face-data-dir', type=str,
+                      help='Path to face recognition training folder')
+    parser.add_argument('--face-train-rec', type=str, default="train.rec",
                       help='Path to face recognition training .rec file')
-    parser.add_argument('--face-train-idx', type=str,
+    parser.add_argument('--face-train-idx', type=str, default="train.idx",
                       help='Path to face recognition training .idx file')
-    parser.add_argument('--face-val-rec', type=str,
+    parser.add_argument('--face-val-rec', type=str, default="val.rec",
                       help='Path to face recognition validation .rec file')
-    parser.add_argument('--face-val-idx', type=str,
+    parser.add_argument('--face-val-idx', type=str, default="val.idx",
                       help='Path to face recognition validation .idx file')
-    parser.add_argument('--face-num-classes', type=int, default=70722,
-                      help='Number of identity classes in face recognition dataset')
-    parser.add_argument('--face-embedding-size', type=int, default=512,
-                      help='Size of face embeddings')
-    parser.add_argument('--face-margin', type=float, default=0.4,
-                      help='Margin for AdaFace loss')
-    parser.add_argument('--face-norm-multiplier', type=float, default=0.333,
-                      help='Norm multiplier for AdaFace')
-    parser.add_argument('--face-scale', type=float, default=64.0,
-                      help='Scale for AdaFace')
-    parser.add_argument('--face-ema-decay', type=float, default=0.01,
-                      help='EMA decay rate for AdaFace batch statistics')
+    # parser.add_argument('--face-num-classes', type=int, default=70722,
+    #                   help='Number of identity classes in face recognition dataset')
+    # parser.add_argument('--face-embedding-size', type=int, default=512,
+    #                   help='Size of face embeddings')
+    # parser.add_argument('--face-margin', type=float, default=0.4,
+    #                   help='Margin for AdaFace loss')
+    # parser.add_argument('--face-norm-multiplier', type=float, default=0.333,
+    #                   help='Norm multiplier for AdaFace')
+    # parser.add_argument('--face-scale', type=float, default=64.0,
+    #                   help='Scale for AdaFace')
+    # parser.add_argument('--face-ema-decay', type=float, default=0.01,
+    #                   help='EMA decay rate for AdaFace batch statistics')
     # parser.add_argument('--face-val-dir', type=str,
     #                   help='Path to face recognition validation directory')
     
@@ -268,9 +268,13 @@ def main():
                       help='Confidence threshold for keypoint visibility')
     args = parser.parse_args()
 
-    if args.face_data_cfg is None:
+    if args.face_det_data_cfg is None:
         filepath = pathlib.Path(__file__).parent.resolve()
-        args.face_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
+        args.face_det_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
+
+    if args.face_data_dir is None:
+        filepath = pathlib.Path(__file__).parent.resolve()
+        args.face_data_dir = str(Path(os.path.join(filepath, "..", "dataset_folders", "ada_face")))
 
     # Base configuration
     base_config = {
@@ -291,12 +295,12 @@ def main():
             module_class=FaceYOLOModule,
             datamodule_class=YOLOFaceDataModule,
             data_config={
-                "data_dir": args.face_data_cfg,
+                "data_dir": args.face_det_data_cfg,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
             },
             module_config={
-                "data_cfg": args.face_data_cfg,
+                "data_cfg": args.face_det_data_cfg,
                 "learning_rate": args.learning_rate,
                 "epochs": 1,  # Single epoch per round
                 "batch": args.batch_size,
@@ -344,7 +348,7 @@ def main():
             module_class=AdaFaceLightningModule,
             datamodule_class=FaceRecognitionDataModule,
             data_config={
-                "data_dir": os.path.dirname(args.face_train_rec),
+                "data_dir": os.path.dirname(args.face_data_dir),
                 "train_rec": os.path.basename(args.face_train_rec),
                 "train_idx": os.path.basename(args.face_train_idx),
                 "val_rec": os.path.basename(args.face_val_rec),
@@ -353,13 +357,13 @@ def main():
                 "num_workers": base_config["workers"],
             },
             module_config={
-                "num_classes": args.face_num_classes,
-                "embedding_size": args.face_embedding_size,
+                # "num_classes": args.face_num_classes,
+                # "embedding_size": args.face_embedding_size,
                 "learning_rate": args.learning_rate,
-                "m": args.face_margin,
-                "h": args.face_norm_multiplier,
-                "s": args.face_scale,
-                "t_alpha": args.face_ema_decay,
+                # "m": args.face_margin,
+                # "h": args.face_norm_multiplier,
+                # "s": args.face_scale,
+                # "t_alpha": args.face_ema_decay,
             },
             wandb_project="adaface-recognition"
         ),

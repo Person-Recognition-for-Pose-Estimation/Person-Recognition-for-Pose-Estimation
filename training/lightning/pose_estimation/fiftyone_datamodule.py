@@ -20,7 +20,7 @@ class FiftyOneCOCOKeypointDataset(Dataset):
         self,
         split: str = "train",
         transform: Optional[A.Compose] = None,
-        subset_size: int = None,  # Changed from max_samples to subset_size
+        max_samples: int = None,
         shuffle: bool = True,
         seed: int = None,
         img_size: int = 640
@@ -31,8 +31,8 @@ class FiftyOneCOCOKeypointDataset(Dataset):
         Args:
             split: Dataset split ('train', 'validation', or 'test')
             transform: Albumentations transformations
-            subset_size: Number of samples to use (if None, use all samples)
-            shuffle: Whether to shuffle when selecting subset
+            max_samples: Maximum number of samples to load
+            shuffle: Whether to shuffle the dataset
             seed: Random seed for shuffling
             img_size: Target image size
         """
@@ -59,9 +59,13 @@ class FiftyOneCOCOKeypointDataset(Dataset):
                 split=split,
                 label_types=["detections", "keypoints"],  # Request keypoint annotations
                 classes=["person"],  # Only load person class
+                max_samples=max_samples,
+                shuffle=shuffle,
+                seed=seed,
                 only_matching=True,  # Only load samples with keypoint annotations
                 dataset_name=dataset_name,
-                labels_path=labels_path
+                # dataset_dir = dataset_dir,
+                labels_path = labels_path
             )
         
             # self.dataset = fo.Dataset.from_dir(
@@ -80,19 +84,7 @@ class FiftyOneCOCOKeypointDataset(Dataset):
             # )
         
         # Convert to PyTorch format
-        samples = list(self.dataset.iter_samples())
-        
-        # Subset the data if requested
-        if subset_size is not None and subset_size < len(samples):
-            if shuffle:
-                if seed is not None:
-                    np.random.seed(seed)
-                indices = np.random.permutation(len(samples))[:subset_size]
-            else:
-                indices = np.arange(subset_size)
-            samples = [samples[i] for i in indices]
-        
-        self.samples = samples
+        self.samples = list(self.dataset.iter_samples())
         
         # Print dataset statistics
         print(f"\nLoaded {split} dataset:")
@@ -234,7 +226,7 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             self.train_dataset = FiftyOneCOCOKeypointDataset(
                 split='train',
                 transform=self.train_transform,
-                subset_size=self.train_samples,
+                max_samples=self.train_samples,
                 shuffle=True,
                 img_size=self.img_size
             )
@@ -242,8 +234,8 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             self.val_dataset = FiftyOneCOCOKeypointDataset(
                 split='validation',
                 transform=self.val_transform,
-                subset_size=self.val_samples,
-                shuffle=False,  # No need to shuffle validation
+                max_samples=self.val_samples,
+                shuffle=True,
                 img_size=self.img_size
             )
             

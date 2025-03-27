@@ -36,14 +36,16 @@ import logging
 # Detection modules
 from lightning.face_detection.module import FaceYOLOModule
 from lightning.face_detection.datamodule import YOLOFaceDataModule
+
 from lightning.person_detection.coco_module import COCOYOLOModule
-from lightning.person_detection.coco_datamodule import COCOYOLODataModule
+from lightning.person_detection.fiftyone_datamodule import FiftyOneCOCODataset
 
 from lightning.face_recognition.module import AdaFaceLightningModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
 from lightning.pose_estimation.module import ViTPoseLightningModule
 from lightning.pose_estimation.fiftyone_datamodule import FiftyOneCOCOKeypointDataModule
+
 
 from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
 from modify_models import create_combined_model
@@ -317,7 +319,7 @@ def main():
         TaskConfig(
             name="object_detection",
             module_class=COCOYOLOModule,
-            datamodule_class=COCOYOLODataModule,
+            datamodule_class=FiftyOneCOCODataset,
             data_config={
                 # "train_path": args.coco_train_path,
                 # "val_path": args.coco_val_path,

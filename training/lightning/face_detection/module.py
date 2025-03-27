@@ -9,7 +9,7 @@ from ..ultralytics_wrapper import UltralyticsTrainerWrapper
 from ultralytics.cfg import get_cfg
 from ..utils import compute_iou as box_iou
 
-class FaceYOLOModule(pl.LightningModule):
+class FaceDetectionModule(pl.LightningModule):
     def __init__(
         self,
         model,

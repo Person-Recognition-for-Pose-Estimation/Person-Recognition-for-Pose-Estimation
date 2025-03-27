@@ -34,17 +34,17 @@ from dataclasses import dataclass
 import logging
 
 # Detection modules
-from lightning.face_detection.module import FaceYOLOModule
-from lightning.face_detection.datamodule import YOLOFaceDataModule
+from lightning.face_detection.module import FaceDetectionModule
+from lightning.face_detection.datamodule import FaceDetectionDataModule
 
-from lightning.person_detection.coco_module import COCOYOLOModule
-from lightning.person_detection.coco_person_datamodule import COCOPersonDataModule
+from lightning.person_detection.module import PersonDetectionModule
+from lightning.person_detection.datamodule import PersonDetectionDataModule
 
-from lightning.face_recognition.module import AdaFaceLightningModule
+from lightning.face_recognition.module import FaceRecognitionModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
-from lightning.pose_estimation.module import ViTPoseLightningModule
-from lightning.pose_estimation.coco_keypoint_datamodule import COCOKeypointDataModule
+from lightning.pose_estimation.module import PoseEtsimationModule
+from lightning.pose_estimation.datamodule import PoseEtsimationDataModule
 
 
 from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
@@ -292,8 +292,8 @@ def main():
         # Face Detection Task
         TaskConfig(
             name="face_detection",
-            module_class=FaceYOLOModule,
-            datamodule_class=YOLOFaceDataModule,
+            module_class=FaceDetectionModule,
+            datamodule_class=FaceDetectionDataModule,
             data_config={
                 "data_dir": args.face_det_data_cfg,
                 "batch_size": args.batch_size,
@@ -316,8 +316,8 @@ def main():
         # Person Detection Task
         TaskConfig(
             name="person_detection",
-            module_class=COCOYOLOModule,
-            datamodule_class=COCOPersonDataModule,
+            module_class=PersonDetectionModule,
+            datamodule_class=PersonDetectionDataModule,
             data_config={
                 "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,
@@ -344,7 +344,7 @@ def main():
         # Face Recognition Task
         TaskConfig(
             name="face_recognition",
-            module_class=AdaFaceLightningModule,
+            module_class=FaceRecognitionModule,
             datamodule_class=FaceRecognitionDataModule,
             data_config={
                 "data_dir": os.path.dirname(args.face_data_dir),
@@ -370,8 +370,8 @@ def main():
         # Pose Estimation Task
         TaskConfig(
             name="pose_estimation",
-            module_class=ViTPoseLightningModule,
-            datamodule_class=COCOKeypointDataModule,
+            module_class=PoseEtsimationModule,
+            datamodule_class=PoseEtsimationDataModule,
             data_config={
                 "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,

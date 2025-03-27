@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.utils.torch_utils import torch_distributed_zero_first
 
-class YOLOFaceDataModule(LightningDataModule):
+class FaceDetectionDataModule(LightningDataModule):
     def __init__(
         self,
         data_dir: str,

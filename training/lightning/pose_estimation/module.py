@@ -57,7 +57,7 @@ class JointsMSELoss(nn.Module):
         return loss / num_joints * self.loss_weight
 
 
-class ViTPoseLightningModule(pl.LightningModule):
+class PoseEtsimationModule(pl.LightningModule):
     def __init__(
         self,
         model,

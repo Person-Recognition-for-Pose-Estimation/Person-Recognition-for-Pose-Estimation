@@ -12,7 +12,7 @@ from ..utils import compute_iou as box_iou
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
-class COCOYOLOModule(pl.LightningModule):
+class PersonDetectionModule(pl.LightningModule):
     def __init__(
         self,
         model,

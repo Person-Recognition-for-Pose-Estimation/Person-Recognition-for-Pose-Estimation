@@ -1,5 +1,5 @@
 """
-COCO dataset module specifically for person detection, using direct COCO API without FiftyOne.
+COCO keypoint dataset module using direct COCO API without FiftyOne dependency.
 """
 import os
 from pathlib import Path
@@ -11,10 +11,10 @@ import numpy as np
 from PIL import Image
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
-class COCOPersonDataset(Dataset):
-    """Dataset class specifically for COCO person detection."""
+class COCOKeypointDataset(Dataset):
+    """Dataset class for COCO keypoint data using direct COCO API."""
     
     def __init__(
         self,
@@ -25,7 +25,7 @@ class COCOPersonDataset(Dataset):
         max_samples: Optional[int] = None,
     ):
         """
-        Initialize COCO person dataset.
+        Initialize COCO keypoint dataset.
         
         Args:
             data_dir: Root directory of COCO dataset
@@ -40,7 +40,7 @@ class COCOPersonDataset(Dataset):
         
         # Setup paths
         self.img_dir = self.data_dir / 'images' / f'{split}2017'
-        ann_file = self.data_dir / 'annotations' / f'person_instances_{split}2017.json'
+        ann_file = self.data_dir / 'annotations' / f'person_keypoints_{split}2017.json'
         
         # Load COCO annotations
         self.coco = COCO(str(ann_file))
@@ -49,7 +49,7 @@ class COCOPersonDataset(Dataset):
         cat_ids = self.coco.getCatIds(catNms=['person'])
         self.person_cat_id = cat_ids[0]
         
-        # Get all image IDs that have person annotations
+        # Get all image IDs that have keypoint annotations
         self.img_ids = self.coco.getImgIds(catIds=cat_ids)
         
         # Randomly subsample if max_samples is specified
@@ -65,12 +65,18 @@ class COCOPersonDataset(Dataset):
                 border_mode=0,
                 value=(114, 114, 114)
             ),
-            A.Normalize(),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels']
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
         ))
+        
+        # Print dataset statistics
+        print(f"\nLoaded {split} dataset:")
+        print(f"Total images: {len(self.img_ids)}")
+        ann_ids = self.coco.getAnnIds(catIds=cat_ids)
+        print(f"Total keypoint annotations: {len(ann_ids)}")
     
     def __len__(self) -> int:
         return len(self.img_ids)
@@ -82,8 +88,9 @@ class COCOPersonDataset(Dataset):
         Returns:
             Dict containing:
                 - image: [3, H, W] tensor
-                - boxes: [N, 4] tensor of bbox coordinates (x1, y1, x2, y2)
-                - labels: [N] tensor of class labels (all 0 for person)
+                - keypoints: [N, K, 3] tensor of keypoint coordinates and visibility
+                - boxes: [N, 4] tensor of person bounding boxes
+                - masks: [N] boolean tensor indicating valid instances
                 - image_id: COCO image ID
         """
         # Load image
@@ -91,56 +98,71 @@ class COCOPersonDataset(Dataset):
         img_info = self.coco.loadImgs([img_id])[0]
         img_path = self.img_dir / img_info['file_name']
         img = Image.open(str(img_path)).convert('RGB')
+        img = np.array(img)
         
         # Get annotations
         ann_ids = self.coco.getAnnIds(imgIds=[img_id], catIds=[self.person_cat_id])
         anns = self.coco.loadAnns(ann_ids)
         
-        # Extract boxes
-        boxes = []
+        # Extract keypoints and boxes
+        keypoints_list = []
+        boxes_list = []
+        
         for ann in anns:
-            # Skip crowd annotations
-            if ann.get('iscrowd', 0):
-                continue
-            
-            # Get bbox coordinates
-            x, y, w, h = ann['bbox']
-            x1 = max(0, x)
-            y1 = max(0, y)
-            x2 = min(img_info['width'], x + w)
-            y2 = min(img_info['height'], y + h)
-            
-            # Skip invalid boxes
-            if x2 <= x1 or y2 <= y1:
+            # Skip annotations without keypoints
+            if 'keypoints' not in ann or len(ann['keypoints']) == 0:
                 continue
                 
-            boxes.append([x1, y1, x2, y2])
+            # Get keypoints [K, 3] array where K is number of keypoints (17 for COCO)
+            keypoints = np.array(ann['keypoints']).reshape(-1, 3)
+            
+            # Get bounding box [x, y, w, h]
+            x, y, w, h = ann['bbox']
+            # Convert to [x1, y1, x2, y2] format
+            box = np.array([x, y, x + w, y + h])
+            
+            keypoints_list.append(keypoints)
+            boxes_list.append(box)
         
-        # Convert to numpy arrays
-        boxes = np.array(boxes, dtype=np.float32)
-        labels = np.zeros(len(boxes), dtype=np.int64)  # All 0 for person class
+        # Convert to numpy arrays with padding if needed
+        if len(keypoints_list) == 0:
+            # No annotations - create empty arrays
+            keypoints = np.zeros((1, 17, 3), dtype=np.float32)
+            boxes = np.zeros((1, 4), dtype=np.float32)
+            masks = np.zeros(1, dtype=bool)
+        else:
+            keypoints = np.stack(keypoints_list)
+            boxes = np.stack(boxes_list)
+            masks = np.ones(len(keypoints_list), dtype=bool)
         
-        # Apply transforms
-        transformed = self.transform(
-            image=np.array(img),
-            bboxes=boxes if len(boxes) > 0 else np.zeros((0, 4)),
-            labels=labels
-        )
-        
-        # Convert to tensors
-        img = transformed['image']  # Already a tensor from ToTensorV2
-        boxes = torch.tensor(transformed['bboxes'], dtype=torch.float32)
-        labels = torch.tensor(transformed['labels'], dtype=torch.long)
+        # Apply transformations
+        if self.transform:
+            # Transform image and keypoints
+            transformed = self.transform(
+                image=img,
+                keypoints=keypoints[..., :2].reshape(-1, 2),  # [N*K, 2]
+                bboxes=boxes
+            )
+            
+            img = transformed['image']  # Already a tensor from ToTensorV2
+            
+            # Reshape keypoints back to [N, K, 2]
+            transformed_keypoints = np.array(transformed['keypoints']).reshape(keypoints.shape[0], -1, 2)
+            
+            # Combine with visibility from original keypoints
+            keypoints = np.dstack([transformed_keypoints, keypoints[..., 2]])
+            boxes = np.array(transformed['bboxes'])
         
         return {
             'image': img,
-            'boxes': boxes,
-            'labels': labels,
+            'keypoints': torch.from_numpy(keypoints).float(),
+            'boxes': torch.from_numpy(boxes).float(),
+            'masks': torch.from_numpy(masks),
             'image_id': img_id
         }
 
-class COCOPersonDataModule(pl.LightningDataModule):
-    """PyTorch Lightning data module for COCO person detection."""
+class PoseEtsimationDataModule(pl.LightningDataModule):
+    """PyTorch Lightning data module for COCO keypoints."""
     
     def __init__(
         self,
@@ -152,7 +174,7 @@ class COCOPersonDataModule(pl.LightningDataModule):
         max_samples_per_epoch_val: Optional[int] = None,
     ):
         """
-        Initialize COCO person data module.
+        Initialize COCO keypoint data module.
         
         Args:
             data_dir: Root directory of COCO dataset
@@ -184,11 +206,11 @@ class COCOPersonDataModule(pl.LightningDataModule):
                 hue=0.1,
                 p=0.5
             ),
-            A.Normalize(),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels']
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
         ))
         
         self.val_transform = A.Compose([
@@ -199,17 +221,17 @@ class COCOPersonDataModule(pl.LightningDataModule):
                 border_mode=0,
                 value=(114, 114, 114)
             ),
-            A.Normalize(),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels']
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
         ))
     
     def setup(self, stage: Optional[str] = None):
         """Create train/val datasets"""
         if stage == 'fit' or stage is None:
-            self.train_dataset = COCOPersonDataset(
+            self.train_dataset = COCOKeypointDataset(
                 data_dir=self.data_dir,
                 split='train',
                 transform=self.train_transform,
@@ -217,13 +239,16 @@ class COCOPersonDataModule(pl.LightningDataModule):
                 max_samples=self.max_samples_per_epoch_train
             )
             
-            self.val_dataset = COCOPersonDataset(
+            self.val_dataset = COCOKeypointDataset(
                 data_dir=self.data_dir,
                 split='val',
                 transform=self.val_transform,
                 img_size=self.img_size,
                 max_samples=self.max_samples_per_epoch_val
             )
+            
+            # Store validation annotations path for evaluation
+            self.val_annotations_path = str(Path(self.data_dir) / 'annotations' / 'person_keypoints_val2017.json')
     
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
@@ -247,39 +272,44 @@ class COCOPersonDataModule(pl.LightningDataModule):
     
     @staticmethod
     def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        """Custom collate function to handle variable size boxes and labels"""
+        """Custom collate function to handle variable size keypoint annotations"""
         images = torch.stack([item['image'] for item in batch])
         image_ids = [item['image_id'] for item in batch]
         
-        # Pad boxes and labels to same size
-        max_boxes = max(item['boxes'].shape[0] for item in batch)
+        # Pad keypoints and boxes to same size
+        max_instances = max(item['keypoints'].shape[0] for item in batch)
         
+        batch_keypoints = []
         batch_boxes = []
-        batch_labels = []
+        batch_masks = []  # To track valid instances
         
         for item in batch:
-            num_boxes = item['boxes'].shape[0]
-            if num_boxes == 0:
-                # Handle empty annotations
-                boxes = torch.zeros((max_boxes, 4))
-                labels = torch.zeros(max_boxes, dtype=torch.long)
-            else:
-                # Pad with zeros
-                boxes = torch.zeros((max_boxes, 4))
-                boxes[:num_boxes] = item['boxes']
-                
-                labels = torch.zeros(max_boxes, dtype=torch.long)
-                labels[:num_boxes] = item['labels']
+            num_instances = item['keypoints'].shape[0]
             
+            # Pad keypoints
+            keypoints = torch.zeros((max_instances, 17, 3))
+            keypoints[:num_instances] = item['keypoints']
+            
+            # Pad boxes
+            boxes = torch.zeros((max_instances, 4))
+            boxes[:num_instances] = item['boxes']
+            
+            # Create mask for valid instances
+            mask = torch.zeros(max_instances, dtype=torch.bool)
+            mask[:num_instances] = item['masks']
+            
+            batch_keypoints.append(keypoints)
             batch_boxes.append(boxes)
-            batch_labels.append(labels)
+            batch_masks.append(mask)
         
+        keypoints = torch.stack(batch_keypoints)
         boxes = torch.stack(batch_boxes)
-        labels = torch.stack(batch_labels)
+        masks = torch.stack(batch_masks)
         
         return {
             'images': images,
+            'keypoints': keypoints,
             'boxes': boxes,
-            'labels': labels,
+            'masks': masks,
             'image_ids': image_ids
         }

@@ -7,7 +7,7 @@ from torch.optim import Adam
 import torch.nn.functional as F
 from typing import Dict, Any, Optional
 
-class AdaFaceLightningModule(pl.LightningModule):
+class FaceRecognitionModule(pl.LightningModule):
     def __init__(
         self,
         model,

@@ -2,7 +2,7 @@
 # torch
 #pytorch<=1.13.1
 tqdm
-bcolz-zipline
+# bcolz-zipline
 prettytable
 menpo
 mxnet

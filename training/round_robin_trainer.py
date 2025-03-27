@@ -317,21 +317,17 @@ def main():
         
         # Person Detection Task
         TaskConfig(
-            name="object_detection",
+            name="person_detection",  # Changed from object_detection to match CombinedModel
             module_class=COCOYOLOModule,
             datamodule_class=FiftyOneCOCODataset,
             data_config={
-                # "train_path": args.coco_train_path,
-                # "val_path": args.coco_val_path,
-                # "train_img_dir": args.coco_train_img_dir,
-                # "val_img_dir": args.coco_val_img_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
                 "img_size": 640,
             },
             module_config={
                 "data_cfg": None,  # Not using YOLO data.yaml
-                "num_classes": 80,  # COCO classes
+                "num_classes": 1,  # Changed from 80 to 1 (person only)
                 "learning_rate": args.learning_rate,
                 "epochs": 1,  # Single epoch per round
                 "batch": args.batch_size,

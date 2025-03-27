@@ -12,7 +12,7 @@ from ..utils import compute_iou as box_iou
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
-class batch_size(pl.LightningModule):
+class COCOYOLOModule(pl.LightningModule):
     def __init__(
         self,
         model,
@@ -35,16 +35,16 @@ class batch_size(pl.LightningModule):
         """
         super().__init__()
         self.model = model
-        self.model.set_task('object_detection')  # Switch to object detection task
+        self.model.set_task('person_detection')  # Switch to person detection task
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
-        self.num_classes = num_classes
+        self.num_classes = 1  # Only person class
         
-        # Initialize metrics for each class
+        # Initialize metrics for person detection only
         self.metrics = DetMetrics(
             save_dir=None,
             plot=False,
-            names={i: f'class_{i}' for i in range(num_classes)}
+            names={0: 'person'}  # Match face detection style
         )
         
         # Configure Ultralytics settings
@@ -115,13 +115,12 @@ class batch_size(pl.LightningModule):
             # Get the first output tensor which contains detections
             detections = preds[0]  # [batch_size, num_anchors, num_classes + 5]
             
-            # Extract boxes, scores, and class predictions
+            # Extract boxes and scores
             boxes = detections[..., :4]  # [batch_size, num_anchors, 4]
             scores = detections[..., 4]  # [batch_size, num_anchors]
-            class_scores = detections[..., 5:]  # [batch_size, num_anchors, num_classes]
             
-            # Get predicted classes
-            pred_cls = torch.argmax(class_scores, dim=-1)  # [batch_size, num_anchors]
+            # For person detection, all predictions are class 0
+            pred_cls = torch.zeros_like(scores, dtype=torch.long)  # [batch_size, num_anchors]
             
             # Get target information
             target_boxes = targets['boxes'].to(boxes.device)
@@ -168,14 +167,14 @@ class batch_size(pl.LightningModule):
         self.metrics = DetMetrics(
             save_dir=None,
             plot=False,
-            names={i: f'class_{i}' for i in range(self.num_classes)}
+            names={0: 'person'}
         )
     
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers"""
-        # Get trainable parameters
-        params = list(self.model.yolo.adapter.parameters()) + \
-                list(self.model.yolo.yolo.parameters())
+        # Get trainable parameters from yolo_person branch
+        params = list(self.model.yolo_person.adapter.parameters()) + \
+                list(self.model.yolo_person.yolo.parameters())
                 
         # Create optimizer
         optimizer = Adam(

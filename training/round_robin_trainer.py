@@ -38,13 +38,13 @@ from lightning.face_detection.module import FaceYOLOModule
 from lightning.face_detection.datamodule import YOLOFaceDataModule
 
 from lightning.person_detection.coco_module import COCOYOLOModule
-from lightning.person_detection.fiftyone_datamodule import FiftyOneCOCODataset
+from lightning.person_detection.coco_person_datamodule import COCOPersonDataModule
 
 from lightning.face_recognition.module import AdaFaceLightningModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
 from lightning.pose_estimation.module import ViTPoseLightningModule
-from lightning.pose_estimation.fiftyone_datamodule import FiftyOneCOCOKeypointDataModule
+from lightning.pose_estimation.coco_keypoint_datamodule import COCOKeypointDataModule
 
 
 from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
@@ -216,6 +216,8 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--learning-rate', type=float, default=0.001)
+    parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('~/coco'),
+                      help='Path to COCO dataset directory. Default: ~/coco')
     
     # # Face detection arguments
     parser.add_argument('--face-det-data-cfg', type=str,
@@ -258,10 +260,6 @@ def main():
     #                   help='Path to face recognition validation directory')
     
     # Pose Estimation arguments
-    parser.add_argument('--pose-train-samples', type=int, default=1000,
-                      help='Number of training samples for pose estimation')
-    parser.add_argument('--pose-val-samples', type=int, default=200,
-                      help='Number of validation samples for pose estimation')
     parser.add_argument('--pose-img-size', type=int, default=256,
                       help='Image size for pose estimation')
     parser.add_argument('--pose-sigma', type=float, default=2.0,
@@ -317,17 +315,20 @@ def main():
         
         # Person Detection Task
         TaskConfig(
-            name="person_detection",  # Changed from object_detection to match CombinedModel
+            name="person_detection",
             module_class=COCOYOLOModule,
-            datamodule_class=FiftyOneCOCODataset,
+            datamodule_class=COCOPersonDataModule,
             data_config={
+                "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
                 "img_size": 640,
+                "max_samples_per_epoch_train": 1000,
+                "max_samples_per_epoch_val": 200,
             },
             module_config={
                 "data_cfg": None,  # Not using YOLO data.yaml
-                "num_classes": 1,  # Changed from 80 to 1 (person only)
+                "num_classes": 1,  # Person class only
                 "learning_rate": args.learning_rate,
                 "epochs": 1,  # Single epoch per round
                 "batch": args.batch_size,
@@ -370,13 +371,14 @@ def main():
         TaskConfig(
             name="pose_estimation",
             module_class=ViTPoseLightningModule,
-            datamodule_class=FiftyOneCOCOKeypointDataModule,
+            datamodule_class=COCOKeypointDataModule,
             data_config={
+                "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
-                "train_samples": args.pose_train_samples,
-                "val_samples": args.pose_val_samples,
                 "img_size": args.pose_img_size,
+                "max_samples_per_epoch_train": 1000,
+                "max_samples_per_epoch_val": 200,
             },
             module_config={
                 "learning_rate": args.learning_rate,

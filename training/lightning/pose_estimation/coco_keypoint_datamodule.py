@@ -1,155 +1,150 @@
 """
-COCO keypoint dataset module using FiftyOne for efficient data management.
+COCO keypoint dataset module using direct COCO API without FiftyOne dependency.
 """
+import os
+from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
-import fiftyone as fo
-import fiftyone.zoo as foz
-from typing import Optional, Dict, List, Tuple
+from pycocotools.coco import COCO
 import numpy as np
 from PIL import Image
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from typing import Optional, Dict, List, Tuple
 
-class FiftyOneCOCOKeypointDataset(Dataset):
-    """
-    Dataset class that uses FiftyOne to manage COCO keypoint data.
-    """
+class COCOKeypointDataset(Dataset):
+    """Dataset class for COCO keypoint data using direct COCO API."""
+    
     def __init__(
         self,
+        data_dir: str,
         split: str = "train",
         transform: Optional[A.Compose] = None,
-        max_samples: int = None,
-        shuffle: bool = True,
-        seed: int = None,
-        img_size: int = 640
+        img_size: int = 640,
+        max_samples: Optional[int] = None,
     ):
         """
-        Initialize FiftyOne COCO keypoint dataset.
+        Initialize COCO keypoint dataset.
         
         Args:
-            split: Dataset split ('train', 'validation', or 'test')
+            data_dir: Root directory of COCO dataset
+            split: Dataset split ('train' or 'val')
             transform: Albumentations transformations
-            max_samples: Maximum number of samples to load
-            shuffle: Whether to shuffle the dataset
-            seed: Random seed for shuffling
             img_size: Target image size
         """
-        self.transform = transform
+        self.data_dir = Path(data_dir)
+        self.split = split
         self.img_size = img_size
-        # seed = 1
+        self.max_samples = max_samples
         
-        # Load dataset through FiftyOne
-        # Create unique dataset name
-        dataset_name = f"coco-2017-keypoints-{split}-{max_samples}-{seed if seed else 'noseed'}"
-
-        dataset_dir = "~/fiftyone/coco-2017/validation"
-        labels_path = "~/fiftyone/coco-2017/raw/person_keypoints_val2017.json"
+        # Setup paths
+        self.img_dir = self.data_dir / 'images' / f'{split}2017'
+        ann_file = self.data_dir / 'annotations' / f'person_keypoints_{split}2017.json'
         
-        # Try to load dataset with this name
-        try:
-            self.dataset = foz.load_dataset(dataset_name)
-            print(f"Loading existing dataset '{dataset_name}'")
-        except:
-            print(f"Creating new dataset '{dataset_name}'")
-            self.dataset = foz.load_zoo_dataset(
-                "coco-2017",
-                # dataset_type = fo.types.COCODetectionDataset,
-                split=split,
-                label_types=["detections", "keypoints"],  # Request keypoint annotations
-                classes=["person"],  # Only load person class
-                max_samples=max_samples,
-                shuffle=shuffle,
-                seed=seed,
-                only_matching=True,  # Only load samples with keypoint annotations
-                dataset_name=dataset_name,
-                # dataset_dir = dataset_dir,
-                labels_path = labels_path
-            )
+        # Load COCO annotations
+        self.coco = COCO(str(ann_file))
         
-            # self.dataset = fo.Dataset.from_dir(
-            #     dataset_type = fo.types.COCODetectionDataset,
-            #     # "coco-2017",
-            #     # split=split,
-            #     label_types=["detections", "segmentations", "keypoints"],  # Request keypoint annotations
-            #     # classes=["person"],  # Only load person class
-            #     # max_samples=max_samples,
-            #     # shuffle=shuffle,
-            #     # seed=seed,
-            #     # only_matching=True,  # Only load samples with keypoint annotations
-            #     # dataset_name=dataset_name,
-            #     dataset_dir = dataset_dir,
-            #     labels_path = labels_path
-            # )
+        # Get person category ID
+        cat_ids = self.coco.getCatIds(catNms=['person'])
+        self.person_cat_id = cat_ids[0]
         
-        # Convert to PyTorch format
-        self.samples = list(self.dataset.iter_samples())
+        # Get all image IDs that have keypoint annotations
+        self.img_ids = self.coco.getImgIds(catIds=cat_ids)
+        
+        # Randomly subsample if max_samples is specified
+        if max_samples is not None and max_samples < len(self.img_ids):
+            self.img_ids = np.random.choice(self.img_ids, size=max_samples, replace=False)
+        
+        # Setup transform
+        self.transform = transform or A.Compose([
+            A.LongestMaxSize(max_size=img_size),
+            A.PadIfNeeded(
+                min_height=img_size,
+                min_width=img_size,
+                border_mode=0,
+                value=(114, 114, 114)
+            ),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
+        ))
         
         # Print dataset statistics
         print(f"\nLoaded {split} dataset:")
-        print(f"Total samples: {len(self.samples)}")
-        keypoint_counts = [len(kp.keypoints) for sample in self.samples 
-                         for kp in sample.ground_truth.keypoints]
-        print(f"Total keypoint annotations: {sum(keypoint_counts)}")
-        print(f"Average keypoints per person: {np.mean(keypoint_counts):.1f}")
-        
+        print(f"Total images: {len(self.img_ids)}")
+        ann_ids = self.coco.getAnnIds(catIds=cat_ids)
+        print(f"Total keypoint annotations: {len(ann_ids)}")
+    
     def __len__(self) -> int:
-        return len(self.samples)
-        
+        return len(self.img_ids)
+    
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
         Get a single sample from the dataset.
         
         Returns:
             Dict containing:
-                - image: [C, H, W] tensor
+                - image: [3, H, W] tensor
                 - keypoints: [N, K, 3] tensor of keypoint coordinates and visibility
                 - boxes: [N, 4] tensor of person bounding boxes
+                - masks: [N] boolean tensor indicating valid instances
                 - image_id: COCO image ID
         """
-        sample = self.samples[idx]
-        
         # Load image
-        img = Image.open(sample.filepath).convert('RGB')
+        img_id = self.img_ids[idx]
+        img_info = self.coco.loadImgs([img_id])[0]
+        img_path = self.img_dir / img_info['file_name']
+        img = Image.open(str(img_path)).convert('RGB')
         img = np.array(img)
         
-        # Get keypoint annotations
+        # Get annotations
+        ann_ids = self.coco.getAnnIds(imgIds=[img_id], catIds=[self.person_cat_id])
+        anns = self.coco.loadAnns(ann_ids)
+        
+        # Extract keypoints and boxes
         keypoints_list = []
         boxes_list = []
         
-        for kp_ann in sample.ground_truth.keypoints:
+        for ann in anns:
+            # Skip annotations without keypoints
+            if 'keypoints' not in ann or len(ann['keypoints']) == 0:
+                continue
+                
             # Get keypoints [K, 3] array where K is number of keypoints (17 for COCO)
-            # Each keypoint is [x, y, visibility]
-            keypoints = np.array(kp_ann.keypoints).reshape(-1, 3)
+            keypoints = np.array(ann['keypoints']).reshape(-1, 3)
             
             # Get bounding box [x, y, w, h]
-            bbox = kp_ann.bounding_box
-            x, y, w, h = bbox
+            x, y, w, h = ann['bbox']
             # Convert to [x1, y1, x2, y2] format
             box = np.array([x, y, x + w, y + h])
             
             keypoints_list.append(keypoints)
             boxes_list.append(box)
-            
+        
         # Convert to numpy arrays with padding if needed
         if len(keypoints_list) == 0:
             # No annotations - create empty arrays
             keypoints = np.zeros((1, 17, 3), dtype=np.float32)
             boxes = np.zeros((1, 4), dtype=np.float32)
+            masks = np.zeros(1, dtype=bool)
         else:
             keypoints = np.stack(keypoints_list)
             boxes = np.stack(boxes_list)
-            
-        # Apply transformations if provided
+            masks = np.ones(len(keypoints_list), dtype=bool)
+        
+        # Apply transformations
         if self.transform:
-            # Create additional keypoint format for albumentations
+            # Transform image and keypoints
             transformed = self.transform(
                 image=img,
                 keypoints=keypoints[..., :2].reshape(-1, 2),  # [N*K, 2]
                 bboxes=boxes
             )
-            img = transformed['image']
+            
+            img = transformed['image']  # Already a tensor from ToTensorV2
             
             # Reshape keypoints back to [N, K, 2]
             transformed_keypoints = np.array(transformed['keypoints']).reshape(keypoints.shape[0], -1, 2)
@@ -157,88 +152,104 @@ class FiftyOneCOCOKeypointDataset(Dataset):
             # Combine with visibility from original keypoints
             keypoints = np.dstack([transformed_keypoints, keypoints[..., 2]])
             boxes = np.array(transformed['bboxes'])
-        else:
-            # Just resize and normalize image
-            img = Image.fromarray(img).resize((self.img_size, self.img_size), Image.BILINEAR)
-            img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
-            
-            # Normalize coordinates to [0, 1]
-            h, w = img.shape[1:]
-            keypoints[..., 0] /= w
-            keypoints[..., 1] /= h
-            boxes[:, [0, 2]] /= w
-            boxes[:, [1, 3]] /= h
         
         return {
             'image': img,
             'keypoints': torch.from_numpy(keypoints).float(),
             'boxes': torch.from_numpy(boxes).float(),
-            'image_id': sample.id
+            'masks': torch.from_numpy(masks),
+            'image_id': img_id
         }
 
-class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
-    """
-    PyTorch Lightning data module for COCO keypoints using FiftyOne.
-    """
+class COCOKeypointDataModule(pl.LightningDataModule):
+    """PyTorch Lightning data module for COCO keypoints."""
+    
     def __init__(
         self,
+        data_dir: str,
         batch_size: int = 16,
         num_workers: int = 4,
-        train_samples: int = 1000,
-        val_samples: int = 200,
         img_size: int = 640,
+        max_samples_per_epoch_train: Optional[int] = None,
+        max_samples_per_epoch_val: Optional[int] = None,
     ):
         """
         Initialize COCO keypoint data module.
         
         Args:
+            data_dir: Root directory of COCO dataset
             batch_size: Batch size
             num_workers: Number of workers for data loading
-            train_samples: Number of training samples to use
-            val_samples: Number of validation samples to use
             img_size: Target image size
         """
         super().__init__()
+        self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.train_samples = train_samples
-        self.val_samples = val_samples
         self.img_size = img_size
+        self.max_samples_per_epoch_train = max_samples_per_epoch_train
+        self.max_samples_per_epoch_val = max_samples_per_epoch_val
         
         # Define transforms
         self.train_transform = A.Compose([
-            A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.8, 1.0)),
+            A.RandomResizedCrop(
+                height=img_size,
+                width=img_size,
+                scale=(0.8, 1.0),
+                ratio=(0.8, 1.2),
+            ),
             A.HorizontalFlip(p=0.5),
-            A.RandomBrightnessContrast(p=0.2),
+            A.ColorJitter(
+                brightness=0.2,
+                contrast=0.2,
+                saturation=0.2,
+                hue=0.1,
+                p=0.5
+            ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
+        ))
         
         self.val_transform = A.Compose([
-            A.Resize(height=img_size, width=img_size),
+            A.LongestMaxSize(max_size=img_size),
+            A.PadIfNeeded(
+                min_height=img_size,
+                min_width=img_size,
+                border_mode=0,
+                value=(114, 114, 114)
+            ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
-        
+        ], keypoint_params=A.KeypointParams(
+            format='xy',
+            remove_invisible=False
+        ))
+    
     def setup(self, stage: Optional[str] = None):
         """Create train/val datasets"""
         if stage == 'fit' or stage is None:
-            self.train_dataset = FiftyOneCOCOKeypointDataset(
+            self.train_dataset = COCOKeypointDataset(
+                data_dir=self.data_dir,
                 split='train',
                 transform=self.train_transform,
-                max_samples=self.train_samples,
-                shuffle=True,
-                img_size=self.img_size
+                img_size=self.img_size,
+                max_samples=self.max_samples_per_epoch_train
             )
             
-            self.val_dataset = FiftyOneCOCOKeypointDataset(
-                split='validation',
+            self.val_dataset = COCOKeypointDataset(
+                data_dir=self.data_dir,
+                split='val',
                 transform=self.val_transform,
-                max_samples=self.val_samples,
-                shuffle=True,
-                img_size=self.img_size
+                img_size=self.img_size,
+                max_samples=self.max_samples_per_epoch_val
             )
             
+            # Store validation annotations path for evaluation
+            self.val_annotations_path = str(Path(self.data_dir) / 'annotations' / 'person_keypoints_val2017.json')
+    
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
@@ -248,7 +259,7 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             pin_memory=True,
             collate_fn=self.collate_fn
         )
-        
+    
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
             self.val_dataset,
@@ -258,7 +269,7 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             pin_memory=True,
             collate_fn=self.collate_fn
         )
-        
+    
     @staticmethod
     def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         """Custom collate function to handle variable size keypoint annotations"""
@@ -285,12 +296,12 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             
             # Create mask for valid instances
             mask = torch.zeros(max_instances, dtype=torch.bool)
-            mask[:num_instances] = True
+            mask[:num_instances] = item['masks']
             
             batch_keypoints.append(keypoints)
             batch_boxes.append(boxes)
             batch_masks.append(mask)
-            
+        
         keypoints = torch.stack(batch_keypoints)
         boxes = torch.stack(batch_boxes)
         masks = torch.stack(batch_masks)
@@ -299,6 +310,6 @@ class FiftyOneCOCOKeypointDataModule(pl.LightningDataModule):
             'images': images,
             'keypoints': keypoints,
             'boxes': boxes,
-            'masks': masks,  # To identify valid instances
+            'masks': masks,
             'image_ids': image_ids
         }

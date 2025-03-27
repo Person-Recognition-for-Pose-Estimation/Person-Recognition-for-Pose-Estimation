@@ -32,6 +32,7 @@
         "yolov"
     ],
     "python.analysis.extraPaths": [
-        "./libs"
+        "./libs",
+        "/home/ubuntu/.local/lib/python3.10/site-packages"
     ]
 }

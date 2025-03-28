@@ -2,10 +2,10 @@
 Lightning module for pose estimation using ViTPose.
 """
 import pytorch_lightning as pl
-import torch
-import torch.nn as nn
-from torch.optim import AdamW
-from typing import Dict, Optional, List
+import torch  # type: ignore
+import torch.nn as nn  # type: ignore
+from torch.optim import AdamW  # type: ignore
+from typing import Dict, Optional, List, Tuple
 import torchmetrics
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval

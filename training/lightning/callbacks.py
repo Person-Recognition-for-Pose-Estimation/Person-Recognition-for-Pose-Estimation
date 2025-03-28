@@ -3,7 +3,7 @@ Custom callbacks for Lightning training.
 """
 from pytorch_lightning.callbacks import Callback
 import wandb
-import torch
+import torch  # type: ignore
 
 class YOLOLoggingCallback(Callback):
     """Callback for logging YOLO-specific metrics and visualizations"""

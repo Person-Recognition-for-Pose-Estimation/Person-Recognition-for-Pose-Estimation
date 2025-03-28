@@ -2,7 +2,7 @@
 Tests for Lightning module and Ultralytics wrapper.
 """
 import unittest
-import torch
+import torch  # type: ignore
 import os
 from pathlib import Path
 import sys

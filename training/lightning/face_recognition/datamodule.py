@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
-import torch
-from torch.utils.data import Dataset, DataLoader
+import torch  # type: ignore
+from torch.utils.data import Dataset, DataLoader  # type: ignore
 import pytorch_lightning as pl
 from PIL import Image
 import albumentations as A

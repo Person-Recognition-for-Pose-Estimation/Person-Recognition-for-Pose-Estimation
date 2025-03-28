@@ -4,13 +4,13 @@ import numpy as np
 
 np.bool = np.bool_
 
-import mxnet as mx
+import mxnet as mx  # type: ignore
 from tqdm import tqdm
 from PIL import Image
-import bcolz
+import bcolz  # type: ignore
 import pickle
 import cv2
-from torchvision import transforms as trans
+from torchvision import transforms as trans  # type: ignore
 import os
 import numbers
 

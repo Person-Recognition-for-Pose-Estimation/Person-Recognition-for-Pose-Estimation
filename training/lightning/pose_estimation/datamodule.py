@@ -3,8 +3,8 @@ COCO keypoint dataset module using direct COCO API without FiftyOne dependency.
 """
 import os
 from pathlib import Path
-import torch
-from torch.utils.data import Dataset, DataLoader
+import torch  # type: ignore
+from torch.utils.data import Dataset, DataLoader  # type: ignore
 import pytorch_lightning as pl
 from pycocotools.coco import COCO
 import numpy as np

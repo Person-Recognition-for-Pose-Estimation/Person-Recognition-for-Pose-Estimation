@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import pathlib
 from pytorch_lightning import LightningDataModule
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader  # type: ignore
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.utils.torch_utils import torch_distributed_zero_first
 

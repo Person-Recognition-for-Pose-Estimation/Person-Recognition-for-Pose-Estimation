@@ -21,7 +21,7 @@ model state across task switches. This allows for gradual improvement in all
 tasks while managing memory efficiently.
 """
 import os
-import torch
+import torch # type: ignore
 import pathlib
 import argparse
 import pytorch_lightning as pl
@@ -234,7 +234,7 @@ def main():
     #                   help='Path to COCO validation images directory')
     
     # Face Recognition arguments
-    parser.add_argument('--face-data-dir', type=str,
+    parser.add_argument('--face-data-dir', type=str, default='~/datasets/ada_face',
                       help='Path to face recognition training folder')
     parser.add_argument('--face-train-rec', type=str, default="train.rec",
                       help='Path to face recognition training .rec file')
@@ -348,10 +348,6 @@ def main():
             datamodule_class=FaceRecognitionDataModule,
             data_config={
                 "data_dir": os.path.dirname(args.face_data_dir),
-                "train_rec": os.path.basename(args.face_train_rec),
-                "train_idx": os.path.basename(args.face_train_idx),
-                "val_rec": os.path.basename(args.face_val_rec),
-                "val_idx": os.path.basename(args.face_val_idx),
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
             },

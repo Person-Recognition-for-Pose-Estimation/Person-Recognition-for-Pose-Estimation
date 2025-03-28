@@ -2,9 +2,9 @@
 Lightning module for YOLO COCO object detection training.
 """
 import pytorch_lightning as pl
-import torch
-from torch.optim import Adam
-from torch.optim.lr_scheduler import OneCycleLR
+import torch  # type: ignore
+from torch.optim import Adam  # type: ignore
+from torch.optim.lr_scheduler import OneCycleLR  # type: ignore
 from ultralytics.utils.metrics import DetMetrics
 from ..ultralytics_wrapper import UltralyticsTrainerWrapper
 from ultralytics.cfg import get_cfg

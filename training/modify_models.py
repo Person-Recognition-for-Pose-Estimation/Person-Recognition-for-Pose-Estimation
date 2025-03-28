@@ -1,7 +1,7 @@
 import pathlib
-import torch
-import torchvision.models as models
-import torch.nn as nn
+import torch  # type: ignore
+import torchvision.models as models  # type: ignore
+import torch.nn as nn  # type: ignore
 import os
 from typing import Optional, Tuple
 

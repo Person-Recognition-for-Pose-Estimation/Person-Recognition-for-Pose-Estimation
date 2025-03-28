@@ -2,9 +2,9 @@
 Lightning module for AdaFace face recognition training.
 """
 import pytorch_lightning as pl
-import torch
-from torch.optim import Adam
-import torch.nn.functional as F
+import torch  # type: ignore
+from torch.optim import Adam  # type: ignore
+import torch.nn.functional as F  # type: ignore
 from typing import Dict, Any, Optional
 
 class FaceRecognitionModule(pl.LightningModule):

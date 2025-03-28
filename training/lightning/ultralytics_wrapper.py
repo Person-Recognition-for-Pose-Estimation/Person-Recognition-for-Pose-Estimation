@@ -1,7 +1,7 @@
 """
 Wrapper for Ultralytics trainer to work with our multi-task model.
 """
-import torch
+import torch  # type: ignore
 from ultralytics.utils import LOGGER
 from .custom_trainer import CustomUltralyticsTrainer
 

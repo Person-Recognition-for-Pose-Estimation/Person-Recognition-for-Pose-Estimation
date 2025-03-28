@@ -1,8 +1,9 @@
 """
 Utility functions for YOLO training, adapted from YOLOv11.
 """
-import torch
+import torch  # type: ignore
 import math
+import torchvision  # type: ignore
 
 def compute_iou(box1, box2, eps=1e-7):
     """

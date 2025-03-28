@@ -2,8 +2,8 @@
 Lightning module for YOLO face detection training using Ultralytics trainer.
 """
 import pytorch_lightning as pl
-import torch
-from torch.optim import Adam
+import torch  # type: ignore
+from torch.optim import Adam  # type: ignore
 from ultralytics.utils.metrics import DetMetrics
 from ..ultralytics_wrapper import UltralyticsTrainerWrapper
 from ultralytics.cfg import get_cfg

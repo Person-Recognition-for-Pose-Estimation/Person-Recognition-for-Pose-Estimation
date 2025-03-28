@@ -86,9 +86,28 @@ class RoundRobinTrainer:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
-        # Setup logging
+        # Create logger
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
+
+        # Create handlers
+        console_handler = logging.StreamHandler()
+        file_handler = logging.FileHandler('thesis.log')
+
+        # Set levels
+        console_handler.setLevel(logging.INFO)
+        file_handler.setLevel(logging.INFO)
+
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        # Add formatter to handlers
+        console_handler.setFormatter(formatter)
+        file_handler.setFormatter(formatter)
+
+        # Add handlers to logger
+        self.logger.addHandler(console_handler)
+        self.logger.addHandler(file_handler)
         
         # Initialize task-specific components
         self.setup_tasks()
@@ -97,15 +116,16 @@ class RoundRobinTrainer:
         """Setup trainers and data modules for each task"""
         self.task_trainers = {}
         self.task_datamodules = {}
+        self.task_modules = {}
         
         for task in self.tasks:
             # Create data module
             data_module = task.datamodule_class(**task.data_config)
             
             # Setup wandb logger if needed
-            logger = None
+            wandb_logger = None
             if self.logging_method == 'wandb':
-                logger = WandbLogger(
+                wandb_logger = WandbLogger(
                     project=task.wandb_project,
                     name=f"{task.name}-training",
                     config={**self.base_config, **task.module_config}
@@ -147,12 +167,13 @@ class RoundRobinTrainer:
                 gradient_clip_val=0.1,
                 accumulate_grad_batches=self.base_config.get("accumulate", 1),
                 log_every_n_steps=10,
-                logger=logger,
+                logger=wandb_logger,
                 enable_checkpointing=True,
             )
             
             self.task_trainers[task.name] = trainer
             self.task_datamodules[task.name] = data_module
+            self.task_modules[task.name] = lightning_module
             
     def train(self, total_epochs: int):
         """
@@ -163,22 +184,23 @@ class RoundRobinTrainer:
         """
         try:
             for epoch in range(total_epochs):
-                self.logger.info(f"\nStarting epoch {epoch + 1}/{total_epochs}")
+                self.logger.info(f"Starting epoch {epoch + 1}/{total_epochs}")
                 
                 # Train each task for one epoch
                 for task in self.tasks:
-                    self.logger.info(f"\nTraining {task.name}")
+                    self.logger.info(f"Training {task.name}")
                     
                     # Set model to current task
                     self.model.set_task(task.name)
                     
-                    # Get trainer and data module
+                    # Get trainer, data module, and lightning module
                     trainer = self.task_trainers[task.name]
                     data_module = self.task_datamodules[task.name]
+                    lightning_module = self.task_modules[task.name]
                     
                     # Train for one epoch
                     trainer.fit(
-                        trainer.lightning_module,
+                        lightning_module,
                         data_module,
                         ckpt_path=None  # Don't resume for now
                     )

@@ -43,7 +43,7 @@ class FaceDetectionModule(pl.LightningModule):
         for k, v in ultralytics_args.items():
             setattr(self.ultralytics_cfg, k, v)
             
-        self.trainer_wrapper = UltralyticsTrainerWrapper(self.model)
+        self.trainer_wrapper = UltralyticsTrainerWrapper(self.model, task_name='face_detection')
         
     def setup(self, stage=None):
         """Setup trainer on fit start"""

@@ -54,7 +54,7 @@ class CustomYOLO(nn.Module):
             nn.SiLU()
         )
         
-        self.yolo = yolo_model.model
+        self.yolo = yolo_model
     
     def forward(self, backbone_features):
         # print(f"Input backbone features shape: {backbone_features.shape}")
@@ -64,7 +64,7 @@ class CustomYOLO(nn.Module):
         # Ensure the input is properly scaled
         x = (x - x.min()) / (x.max() - x.min())  # Normalize to [0,1]
         
-        detections = self.yolo(x)
+        detections = self.yolo.model(x)
         return detections
 
         

@@ -57,7 +57,7 @@ class PersonDetectionModule(pl.LightningModule):
         for k, v in ultralytics_args.items():
             setattr(self.ultralytics_cfg, k, v)
             
-        self.trainer_wrapper = UltralyticsTrainerWrapper(self.model)
+        self.trainer_wrapper = UltralyticsTrainerWrapper(self.model, task_name='person_detection')
         
         # Track best metrics
         self.best_map = 0.0

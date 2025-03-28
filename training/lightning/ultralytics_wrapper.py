@@ -6,16 +6,21 @@ from ultralytics.utils import LOGGER
 from .custom_trainer import CustomUltralyticsTrainer
 
 class UltralyticsTrainerWrapper:
-    def __init__(self, combined_model):
+    def __init__(self, combined_model, task_name):
         """
         Initialize wrapper for Ultralytics trainer
         
         Args:
             combined_model: Our multi-task model with backbone and all branches
+            task_name: Name of the task ('face_detection' or 'person_detection')
         """
         self.model = combined_model
-        self.model.set_task('face_detection')
-        self.yolo_face = self.model.yolo_face
+        self.task_name = task_name
+        self.model.set_task(task_name)
+        
+        # Get the appropriate YOLO branch based on task
+        self.yolo_branch = (self.model.yolo_face if task_name == 'face_detection' 
+                           else self.model.yolo_person)
         
     def setup_trainer(self, cfg, _callbacks=None):
         """
@@ -112,12 +117,11 @@ class UltralyticsTrainerWrapper:
             # Get backbone features
             backbone_features = self.model.backbone(images)
             
-            # Pass through YOLO face branch
-            # The CustomYOLO class handles the adapter and YOLO model
-            preds = self.model.yolo_face(backbone_features)
+            # Pass through appropriate YOLO branch
+            preds = self.yolo_branch(backbone_features)
             
             # Get loss from YOLO's internal criterion
-            loss_dict = self.yolo_face.yolo.criterion(preds, targets)
+            loss_dict = self.yolo_branch.yolo.model.criterion(preds, targets)
             
             # Sum all losses
             total_loss = sum(v for k, v in loss_dict.items() if v.requires_grad)
@@ -146,7 +150,7 @@ class UltralyticsTrainerWrapper:
         if targets is None:
             return None
             
-        self.model.yolo_face.train()
+        self.yolo_branch.train()
         total_loss, _, _ = self.compute_loss(images, targets)
         return total_loss
 
@@ -164,7 +168,7 @@ class UltralyticsTrainerWrapper:
         if targets is None:
             return None, None, None
             
-        self.model.yolo_face.eval()
+        self.yolo_branch.eval()
         with torch.no_grad():
             _, loss_dict, preds = self.compute_loss(images, targets)
             

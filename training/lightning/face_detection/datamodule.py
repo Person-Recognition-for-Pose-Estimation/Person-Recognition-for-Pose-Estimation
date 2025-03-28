@@ -46,7 +46,7 @@ class FaceDetectionDataModule(LightningDataModule):
         with torch_distributed_zero_first(self.trainer.local_rank):
             # Initialize YOLO datasets
             # Load data.yaml configuration
-            import yaml
+            import yaml  # type: ignore
             with open(f"{self.data_dir}/data.yaml", 'r') as f:
                 data_config = yaml.safe_load(f)
             

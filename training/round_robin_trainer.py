@@ -220,7 +220,7 @@ def main():
                       help='Path to COCO dataset directory. Default: ~/coco')
     
     # # Face detection arguments
-    parser.add_argument('--face-det-data-cfg', type=str,
+    parser.add_argument('--face-det-data-cfg', type=str, default='~/datasets/yolo_face',
                       help='Path to YOLO format data config for face detection')
     
     # # Person detection arguments
@@ -236,14 +236,14 @@ def main():
     # Face Recognition arguments
     parser.add_argument('--face-data-dir', type=str, default='~/datasets/ada_face',
                       help='Path to face recognition training folder')
-    parser.add_argument('--face-train-rec', type=str, default="train.rec",
-                      help='Path to face recognition training .rec file')
-    parser.add_argument('--face-train-idx', type=str, default="train.idx",
-                      help='Path to face recognition training .idx file')
-    parser.add_argument('--face-val-rec', type=str, default="val.rec",
-                      help='Path to face recognition validation .rec file')
-    parser.add_argument('--face-val-idx', type=str, default="val.idx",
-                      help='Path to face recognition validation .idx file')
+    # parser.add_argument('--face-train-rec', type=str, default="train.rec",
+    #                   help='Path to face recognition training .rec file')
+    # parser.add_argument('--face-train-idx', type=str, default="train.idx",
+    #                   help='Path to face recognition training .idx file')
+    # parser.add_argument('--face-val-rec', type=str, default="val.rec",
+    #                   help='Path to face recognition validation .rec file')
+    # parser.add_argument('--face-val-idx', type=str, default="val.idx",
+    #                   help='Path to face recognition validation .idx file')
     # parser.add_argument('--face-num-classes', type=int, default=70722,
     #                   help='Number of identity classes in face recognition dataset')
     # parser.add_argument('--face-embedding-size', type=int, default=512,
@@ -266,15 +266,16 @@ def main():
                       help='Gaussian sigma for heatmap generation')
     parser.add_argument('--pose-keypoint-thresh', type=float, default=0.3,
                       help='Confidence threshold for keypoint visibility')
+    
     args = parser.parse_args()
 
-    if args.face_det_data_cfg is None:
-        filepath = pathlib.Path(__file__).parent.resolve()
-        args.face_det_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
+    # if args.face_det_data_cfg is None:
+    #     filepath = pathlib.Path(__file__).parent.resolve()
+    #     args.face_det_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
 
-    if args.face_data_dir is None:
-        filepath = pathlib.Path(__file__).parent.resolve()
-        args.face_data_dir = str(Path(os.path.join(filepath, "..", "dataset_folders", "ada_face")))
+    # if args.face_data_dir is None:
+    #     filepath = pathlib.Path(__file__).parent.resolve()
+    #     args.face_data_dir = str(Path(os.path.join(filepath, "..", "dataset_folders", "ada_face")))
 
     # Base configuration
     base_config = {

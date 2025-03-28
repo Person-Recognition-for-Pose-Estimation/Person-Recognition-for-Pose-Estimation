@@ -86,11 +86,17 @@ def create_yolo_branches(
     # Person detection
     person_model_path = component_models_dir / "yolo11n.pt"
     yolo_model = YOLO(str(person_model_path))
+
+    yolo_model.overrides['data'] = "coco"
+
     person_detect_branch = CustomYOLO(yolo_model)
     
     # Face detection
     face_model_path = component_models_dir / "yolov11n-face.pt"
     yolo_face_model = YOLO(str(face_model_path))
+
+    yolo_face_model.overrides['data'] = "yolo_face"
+
     face_detect_branch = CustomYOLO(yolo_face_model)
     
     if save_components:

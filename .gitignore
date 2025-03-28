@@ -24,3 +24,5 @@ test_outputs/*
 dataset_folders.zip
 thesis.log
 runs/*
+
+yolo11n.pt

@@ -8,10 +8,16 @@ class CustomUltralyticsTrainer(BaseTrainer):
     def __init__(self, combined_model, **kwargs):
         super().__init__(**kwargs)
         self.combined_model = combined_model
+        self.model = combined_model  # Required by BaseTrainer
+        self.args.data = None  # Prevent dataset loading
         
     def get_model(self, cfg=None, weights=None, verbose=True):
         """Return our combined model instead of loading a new one"""
         return self.combined_model
+        
+    def get_dataset(self, *args, **kwargs):
+        """Override dataset loading since we handle that in Lightning"""
+        return None, None
             
     def preprocess_batch(self, batch):
         """Preprocess batch - no changes needed as our model handles the backbone"""
@@ -19,7 +25,7 @@ class CustomUltralyticsTrainer(BaseTrainer):
             
     def progress_string(self):
         """Return progress string with task information"""
-        return f'task: face_detection\n{super().progress_string()}'
+        return f'task: {self.combined_model.current_task}\n{super().progress_string()}'
         
     def get_model_state(self):
         """Get model state dict for saving"""

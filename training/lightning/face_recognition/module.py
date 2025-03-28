@@ -45,9 +45,9 @@ class FaceRecognitionModule(pl.LightningModule):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         
-        # Initialize metrics
-        self.train_acc = pl.metrics.Accuracy()
-        self.val_acc = pl.metrics.Accuracy()
+        # # Initialize metrics
+        # self.train_acc = pl.metrics.Accuracy()
+        # self.val_acc = pl.metrics.Accuracy()
         
         # Register buffers for AdaFace statistics
         self.register_buffer('batch_mean', torch.ones(1) * 20)

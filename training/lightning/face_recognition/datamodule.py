@@ -114,10 +114,10 @@ class FaceRecognitionDataModule(pl.LightningDataModule):
         self.train_transform = A.Compose([
             A.Resize(image_size, image_size),
             A.HorizontalFlip(p=0.5),
-            A.OneOf([
-                A.RandomBrightness(limit=0.1, p=1),
-                A.RandomContrast(limit=0.1, p=1),
-            ], p=0.3),
+            # A.OneOf([
+            #     A.RandomBrightness(limit=0.1, p=1),
+            #     A.RandomContrast(limit=0.1, p=1),
+            # ], p=0.3),
             A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             ToTensorV2(),
         ])

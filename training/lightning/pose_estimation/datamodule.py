@@ -63,7 +63,6 @@ class COCOKeypointDataset(Dataset):
                 min_height=img_size,
                 min_width=img_size,
                 border_mode=0,
-                value=(114, 114, 114)
             ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
@@ -193,8 +192,7 @@ class PoseEtsimationDataModule(pl.LightningDataModule):
         # Define transforms
         self.train_transform = A.Compose([
             A.RandomResizedCrop(
-                height=img_size,
-                width=img_size,
+                size=(img_size, img_size),  # (height, width)
                 scale=(0.8, 1.0),
                 ratio=(0.8, 1.2),
             ),
@@ -219,7 +217,6 @@ class PoseEtsimationDataModule(pl.LightningDataModule):
                 min_height=img_size,
                 min_width=img_size,
                 border_mode=0,
-                value=(114, 114, 114)
             ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),

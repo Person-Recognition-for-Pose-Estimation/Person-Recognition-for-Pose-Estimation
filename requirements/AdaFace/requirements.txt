@@ -5,5 +5,7 @@ tqdm
 # bcolz-zipline
 prettytable
 menpo
+
+# mxnet is deprecated, and does not work on all devices: https://pypi.org/project/mxnet/
 mxnet
 opencv-python

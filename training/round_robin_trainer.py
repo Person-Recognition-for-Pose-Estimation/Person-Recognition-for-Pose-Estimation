@@ -238,11 +238,13 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--learning-rate', type=float, default=0.001)
-    parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('~/coco'),
-                      help='Path to COCO dataset directory. Default: ~/coco')
+    parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('/home/ubuntu/coco'),
+                      help='Path to COCO dataset directory. Default: /home/ubuntu/coco')
     
     # # Face detection arguments
-    parser.add_argument('--face-det-data-cfg', type=str, default='~/datasets/yolo_face',
+    parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/datasets/yolo_face',
+                      help='Path to YOLO format data config for face detection')
+    parser.add_argument('--face-det-data-cfg', type=str, default='/home/ubuntu/datasets/yolo_face/data.yaml',
                       help='Path to YOLO format data config for face detection')
     
     # # Person detection arguments
@@ -256,7 +258,7 @@ def main():
     #                   help='Path to COCO validation images directory')
     
     # Face Recognition arguments
-    parser.add_argument('--face-data-dir', type=str, default='~/datasets/ada_face',
+    parser.add_argument('--face-data-dir', type=str, default='/home/ubuntu/datasets/ada_face',
                       help='Path to face recognition training folder')
     # parser.add_argument('--face-train-rec', type=str, default="train.rec",
     #                   help='Path to face recognition training .rec file')
@@ -318,7 +320,7 @@ def main():
             module_class=FaceDetectionModule,
             datamodule_class=FaceDetectionDataModule,
             data_config={
-                "data_dir": args.face_det_data_cfg,
+                "data_dir": args.face_det_data_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
             },

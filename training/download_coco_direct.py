@@ -147,8 +147,8 @@ def main():
     parser.add_argument(
         '--data-dir',
         type=str,
-        default=os.path.expanduser('~/coco'),
-        help='Directory to store the dataset. Use absolute path or ~/coco for home directory. Default: ~/coco'
+        default=os.path.expanduser('/home/ubuntu/coco'),
+        help='Directory to store the dataset. Use absolute path or /home/ubuntu/coco for home directory. Default: /home/ubuntu/coco'
     )
     parser.add_argument(
         '--splits',

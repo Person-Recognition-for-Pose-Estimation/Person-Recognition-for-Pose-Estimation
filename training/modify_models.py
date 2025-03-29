@@ -26,46 +26,101 @@ def get_model_paths() -> Tuple[pathlib.Path, pathlib.Path]:
 from ultralytics import YOLO
 
 
+class Conv(nn.Module):
+    """Basic convolution block with batch normalization and activation."""
+    def __init__(self, in_ch: int, out_ch: int, k: int = 1, s: int = 1, p: int = 0, g: int = 1):
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, k, s, p, groups=g, bias=False)
+        self.norm = nn.BatchNorm2d(out_ch, eps=0.001, momentum=0.03)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        return self.act(self.norm(self.conv(x)))
+
+class DFL(nn.Module):
+    """Distribution Focal Loss head for better box regression."""
+    def __init__(self, ch: int = 16):
+        super().__init__()
+        self.ch = ch
+        self.conv = nn.Conv2d(ch, 1, 1, bias=False).requires_grad_(False)
+        x = torch.arange(ch, dtype=torch.float).view(1, ch, 1, 1)
+        self.conv.weight.data[:] = nn.Parameter(x)
+
+    def forward(self, x):
+        b, c, a = x.shape  # batch, channels, anchors
+        x = x.view(b, 4, self.ch, a).transpose(2, 1)
+        return self.conv(x.softmax(1)).view(b, 4, a)
+
 class CustomYOLO(nn.Module):
-    def __init__(self, yolo_model, backbone_channels=2048):
-        super(CustomYOLO, self).__init__()
+    def __init__(self, num_classes: int = 1, backbone_channels: int = 2048):
+        super().__init__()
         
-        # Define target size that YOLO expects (typically 640x640 or similar)
-        self.target_size = 640  # or whatever size your YOLO model expects
-        
+        # Feature adaptation
         self.adapter = nn.Sequential(
-            nn.Conv2d(backbone_channels, 512, kernel_size=1),
-            nn.BatchNorm2d(512),
-            nn.SiLU(),
-            
-            # Adaptive pooling to get consistent spatial dimensions
-            nn.AdaptiveAvgPool2d((self.target_size // 32, self.target_size // 32)),
-            
-            nn.Conv2d(512, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.SiLU(),
-            
-            # Upsample to match YOLO's expected input size
-            nn.Upsample(size=(self.target_size, self.target_size), mode='bilinear', align_corners=True),
-            
-            # Final adaptation to 3 channels
-            nn.Conv2d(256, 3, kernel_size=1),
-            nn.BatchNorm2d(3),
-            nn.SiLU()
+            Conv(backbone_channels, 512, k=1),
+            Conv(512, 256, k=3, p=1),
+            Conv(256, 256, k=1)
         )
         
-        self.yolo = yolo_model
+        # Detection head parameters
+        self.nc = num_classes  # number of classes
+        self.ch = 16  # DFL channels
+        self.no = num_classes + self.ch * 4  # number of outputs per anchor
+        
+        # Box regression branch with DFL
+        self.box = nn.Sequential(
+            Conv(256, 256, k=3, p=1),
+            Conv(256, 256, k=3, p=1),
+            nn.Conv2d(256, 4 * self.ch, 1)  # 4 box coordinates * DFL channels
+        )
+        
+        # Classification branch
+        self.cls = nn.Sequential(
+            Conv(256, 256, k=3, p=1),
+            Conv(256, 256, k=3, p=1),
+            nn.Conv2d(256, self.nc, 1)
+        )
+        
+        self.dfl = DFL(self.ch)
+        
+        # Initialize biases
+        self.initialize_biases()
     
-    def forward(self, backbone_features):
-        # print(f"Input backbone features shape: {backbone_features.shape}")
-        x = self.adapter(backbone_features)
-        # print(f"After adapter shape: {x.shape}")
+    def initialize_biases(self):
+        """Initialize biases for better training stability."""
+        for conv in self.box:
+            if isinstance(conv, nn.Conv2d):
+                conv.bias.data.fill_(1.0)
+        for conv in self.cls:
+            if isinstance(conv, nn.Conv2d):
+                b = conv.bias.view(1, -1)
+                b.data.fill_(-4.595)  # -log((1 - 0.01) / 0.01)
+    
+    def forward(self, x):
+        """
+        Forward pass returning box predictions and class logits.
+        Args:
+            x: Backbone features [B, C, H, W]
+        Returns:
+            Tuple of:
+            - pred_boxes: Box predictions [B, 4, HW]
+            - pred_scores: Class predictions [B, nc, HW]
+        """
+        x = self.adapter(x)
         
-        # Ensure the input is properly scaled
-        x = (x - x.min()) / (x.max() - x.min())  # Normalize to [0,1]
+        # Get predictions
+        box_pred = self.box(x)  # [B, 4*ch, H, W]
+        cls_pred = self.cls(x)  # [B, nc, H, W]
         
-        detections = self.yolo.model(x)
-        return detections
+        # Reshape and process boxes through DFL
+        B, _, H, W = x.shape
+        box_pred = box_pred.view(B, 4, self.ch, H * W)
+        box_pred = self.dfl(box_pred.view(B, 4 * self.ch, H * W))  # [B, 4, HW]
+        
+        # Reshape class predictions
+        cls_pred = cls_pred.view(B, self.nc, H * W)  # [B, nc, HW]
+        
+        return box_pred, cls_pred
 
         
         # TODO: If inference, process detections
@@ -83,21 +138,11 @@ def create_yolo_branches(
     device: str = 'cpu'
 ) -> Tuple[CustomYOLO, CustomYOLO]:
     """Create YOLO branches for person and face detection."""
-    # Person detection
-    person_model_path = component_models_dir / "yolo11n.pt"
-    yolo_model = YOLO(str(person_model_path))
-
-    yolo_model.overrides['data'] = "/home/ubuntu/coco/data.yaml"
-
-    person_detect_branch = CustomYOLO(yolo_model)
+    # Person detection (1 class - person)
+    person_detect_branch = CustomYOLO(num_classes=1, backbone_channels=2048)
     
-    # Face detection
-    face_model_path = component_models_dir / "yolov11n-face.pt"
-    yolo_face_model = YOLO(str(face_model_path))
-
-    yolo_face_model.overrides['data'] = "/home/ubuntu/datasets/yolo_face/data.yaml"
-
-    face_detect_branch = CustomYOLO(yolo_face_model)
+    # Face detection (1 class - face)
+    face_detect_branch = CustomYOLO(num_classes=1, backbone_channels=2048)
     
     if save_components:
         torch.save(person_detect_branch.state_dict(), edited_components_dir / "custom_yolo.pth")

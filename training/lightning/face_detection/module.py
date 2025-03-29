@@ -7,7 +7,7 @@ from torch.optim import Adam  # type: ignore
 from ultralytics.utils.metrics import DetMetrics
 from ..ultralytics_wrapper import UltralyticsTrainerWrapper
 from ultralytics.cfg import get_cfg
-from ..utils import compute_iou as box_iou
+from ..utils import compute_iou
 
 class FaceDetectionModule(pl.LightningModule):
     def __init__(
@@ -60,42 +60,47 @@ class FaceDetectionModule(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         """Single validation step"""
-        preds, targets, loss_dict = self.trainer_wrapper.validation_step(batch)
-        if preds is None:
+        nms_preds, targets, loss_dict = self.trainer_wrapper.validation_step(batch)
+        if nms_preds is None:
             return
             
         # Log validation loss components
         for k, v in loss_dict.items():
             self.log(f"val/{k}", v, prog_bar=True)
             
-        # Process predictions for metrics
-        # YOLO outputs a list of tensors, where each tensor contains detections
-        if isinstance(preds, (list, tuple)) and len(preds) > 0:
-            # Get the first output tensor which contains detections
-            detections = preds[0]  # Shape: [batch_size, num_anchors, num_classes + 5]
+        # Process NMS predictions for metrics
+        for i, pred in enumerate(nms_preds):  # Loop through batch
+            if len(pred) == 0:  # Skip if no detections
+                continue
+                
+            # Extract boxes, scores, and classes from NMS predictions
+            boxes = pred[:, :4]  # [num_det, 4]
+            scores = pred[:, 4]  # [num_det]
+            pred_cls = pred[:, 5]  # [num_det]
             
-            # Extract boxes and scores
-            boxes = detections[..., :4]  # [batch_size, num_anchors, 4]
-            scores = detections[..., 4]  # [batch_size, num_anchors]
+            # Get target boxes and classes for this batch item
+            batch_mask = targets['batch_idx'] == i
+            target_boxes = targets['bboxes'][batch_mask]
+            target_cls = targets['cls'][batch_mask]
             
-            # For face detection, all predictions are class 0
-            pred_cls = torch.zeros_like(scores)  # [batch_size, num_anchors]
-            
-            # Get target information
-            target_boxes = targets['bboxes'].to(boxes.device)
-            target_cls = targets['cls'].to(boxes.device)
-            
+            if len(target_boxes) == 0:  # Skip if no targets
+                continue
+                
             # Calculate IoU between predictions and targets
-            boxes_flat = boxes.reshape(-1, 4)
-            target_boxes_flat = target_boxes.reshape(-1, 4)
-            iou = box_iou(boxes_flat, target_boxes_flat)
-            max_iou, _ = iou.max(dim=1)
+            iou = compute_iou(boxes, target_boxes)  # [num_det, num_targets]
+            max_iou, _ = iou.max(dim=1)  # [num_det]
             
             # True positives are predictions with IoU > 0.5
-            tp = (max_iou > 0.5).float().view_as(scores)
+            tp = (max_iou > 0.5).float()
             
-            # Update metrics
-            self.metrics.process(tp, scores, pred_cls, target_cls)
+            # Update metrics - one detection at a time to handle different numbers of detections
+            for j in range(len(tp)):
+                self.metrics.process(
+                    tp[j:j+1],  # [1]
+                    scores[j:j+1],  # [1]
+                    pred_cls[j:j+1],  # [1]
+                    target_cls  # [num_targets]
+                )
     
     def on_validation_epoch_end(self):
         """Called at the end of validation"""
@@ -117,7 +122,7 @@ class FaceDetectionModule(pl.LightningModule):
         """Configure optimizers"""
         # Optimize both adapter and YOLO model parameters
         params = list(self.model.yolo_face.adapter.parameters()) + \
-                list(self.model.yolo_face.yolo.parameters())
+                list(self.model.yolo_face.yolo_model.parameters())
                 
         optimizer = Adam(
             params,

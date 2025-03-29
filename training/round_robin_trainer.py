@@ -34,11 +34,11 @@ from dataclasses import dataclass
 import logging
 
 # Detection modules
-from lightning.face_detection.module import FaceDetectionModule
-from lightning.face_detection.datamodule import FaceDetectionDataModule
+from lightning.face_detection.module_v2 import FaceDetectionModule
+from lightning.face_detection.datamodule_v2 import FaceDetectionDataModule
 
-from lightning.person_detection.module import PersonDetectionModule
-from lightning.person_detection.datamodule import PersonDetectionDataModule
+from lightning.person_detection.module_v2 import PersonDetectionModule
+from lightning.person_detection.datamodule_v2 import PersonDetectionDataModule
 
 from lightning.face_recognition.module import FaceRecognitionModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
@@ -47,7 +47,7 @@ from lightning.pose_estimation.module import PoseEtsimationModule
 from lightning.pose_estimation.datamodule import PoseEtsimationDataModule
 
 
-from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from modify_models import create_combined_model
 
 @dataclass
@@ -132,15 +132,7 @@ class RoundRobinTrainer:
                 )
             
             # Setup callbacks
-            callbacks = [
-                YOLOLoggingCallback(
-                    log_interval=100,
-                    logging_method=self.logging_method
-                ),
-                YOLOModelCheckpoint(
-                    save_path=str(self.checkpoint_dir / task.name)
-                ),
-                ModelCheckpoint(
+            callbacks = ModelCheckpoint(
                     dirpath=str(self.checkpoint_dir / task.name),
                     filename=f"{task.name}-{{epoch:02d}}-{{val_mAP50-95:.2f}}",
                     monitor="val/mAP50-95",
@@ -148,7 +140,6 @@ class RoundRobinTrainer:
                     save_top_k=3,
                     every_n_epochs=self.base_config.get("save_period", 1)
                 )
-            ]
             
             # Create Lightning module
             lightning_module = task.module_class(
@@ -322,18 +313,13 @@ def main():
             data_config={
                 "data_dir": args.face_det_data_dir,
                 "batch_size": args.batch_size,
+                "image_size": 640,
                 "num_workers": base_config["workers"],
+                "pin_memory": True
             },
             module_config={
-                "data_cfg": args.face_det_data_cfg,
                 "learning_rate": args.learning_rate,
-                "epochs": 1,  # Single epoch per round
-                "batch": args.batch_size,
-                "imgsz": 640,
-                "device": 0 if torch.cuda.is_available() else "cpu",
-                "amp": base_config["amp"],
-                "workers": base_config["workers"],
-                "save_period": base_config["save_period"],
+                "weight_decay": base_config.get("weight_decay", 0.0005),
             },
             wandb_project="yolo-face-detection"
         ),
@@ -346,22 +332,15 @@ def main():
             data_config={
                 "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,
+                "image_size": 640,
                 "num_workers": base_config["workers"],
-                "img_size": 640,
+                "pin_memory": True,
                 "max_samples_per_epoch_train": 1000,
                 "max_samples_per_epoch_val": 200,
             },
             module_config={
-                "data_cfg": None,  # Not using YOLO data.yaml
-                "num_classes": 1,  # Person class only
                 "learning_rate": args.learning_rate,
-                "epochs": 1,  # Single epoch per round
-                "batch": args.batch_size,
-                "imgsz": 640,
-                "device": 0 if torch.cuda.is_available() else "cpu",
-                "amp": base_config["amp"],
-                "workers": base_config["workers"],
-                "save_period": base_config["save_period"],
+                "weight_decay": base_config.get("weight_decay", 0.0005),
             },
             wandb_project="yolo-person-detection"
         ),

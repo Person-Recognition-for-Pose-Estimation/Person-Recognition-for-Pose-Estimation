@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from typing import Dict, Tuple, Optional
 
 from ..utils import compute_iou
-from ..yolopt.util import non_max_suppression
+from yolopt.util import non_max_suppression
 from ..face_detection.module_v2 import DetectionMetrics, FaceDetectionModule
 
 class PersonDetectionModule(FaceDetectionModule):

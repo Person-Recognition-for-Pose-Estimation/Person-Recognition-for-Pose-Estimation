@@ -9,9 +9,9 @@ import tqdm
 import yaml
 from torch.utils import data
 
-from nets import nn
-from utils import util
-from utils.dataset import Dataset
+from .nets import nn
+from . import util
+from .dataset import Dataset
 
 warnings.filterwarnings("ignore")
 

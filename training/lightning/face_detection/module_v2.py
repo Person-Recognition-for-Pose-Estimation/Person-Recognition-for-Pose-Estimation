@@ -213,7 +213,8 @@ class FaceDetectionModule(pl.LightningModule):
         images, targets = batch
         
         # Forward pass
-        pred_boxes, pred_scores = self.model.yolo_face(images)
+        predictions = self.model(images)
+        pred_boxes, pred_scores = predictions
         
         # Compute loss
         loss, loss_dict = self.compute_loss(pred_boxes, pred_scores, targets)
@@ -227,8 +228,9 @@ class FaceDetectionModule(pl.LightningModule):
         """Single validation step"""
         images, targets = batch
         
-        # Forward pass
-        pred_boxes, pred_scores = self.model.yolo_face(images)
+        # Forward pass    
+        predictions = self.model(images)
+        pred_boxes, pred_scores = predictions
         
         # Compute loss
         loss, loss_dict = self.compute_loss(pred_boxes, pred_scores, targets)

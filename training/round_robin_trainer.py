@@ -233,9 +233,9 @@ def main():
                       help='Path to COCO dataset directory. Default: /home/ubuntu/coco')
     
     # # Face detection arguments
-    parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/datasets/yolo_face',
+    parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/',
                       help='Path to YOLO format data config for face detection')
-    parser.add_argument('--face-det-data-cfg', type=str, default='/home/ubuntu/datasets/yolo_face/data.yaml',
+    parser.add_argument('--face-det-data-cfg', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/data.yaml',
                       help='Path to YOLO format data config for face detection')
     
     # # Person detection arguments

@@ -41,4 +41,5 @@ class FaceDetectionDataModule(BaseDetectionDataModule):
         base_dir = Path(self.data_dir)
         img_dir = base_dir / 'images' / split
         label_dir = base_dir / 'labels' / split
+        print("img_dir", img_dir)
         return str(img_dir), str(label_dir)

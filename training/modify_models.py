@@ -30,73 +30,96 @@ import sys
 sys.path.append('/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/training/yolopt')
 
 
-from yolopt.nets.nn import YOLO, yolo_v11_n
+from yolopt.nets.nn import YOLO, yolo_v11_n, Conv, Head
 
 class CustomYOLO(nn.Module):
-    def __init__(self, num_classes: int = 1, backbone_channels: int = 2048):
+    def __init__(self, yolo_model, backbone_channels: int = 2048):
         super().__init__()
         
-        # Feature adaptation with better information preservation
+        # Feature adaptation with spatial upsampling and channel reduction
         self.adapter = nn.Sequential(
-            # Initial dimensionality reduction while preserving spatial information
-            nn.Conv2d(backbone_channels, 1024, kernel_size=1),
-            nn.BatchNorm2d(1024),
-            nn.SiLU(),
-            
-            # Spatial feature processing with residual connection
-            nn.Conv2d(1024, 1024, kernel_size=3, padding=1),
-            nn.BatchNorm2d(1024),
-            nn.SiLU(),
-            
-            # Feature pyramid-like structure
-            nn.Conv2d(1024, 512, kernel_size=1),
+            # Initial dimensionality reduction to save memory before upsampling
+            nn.Conv2d(backbone_channels, 512, kernel_size=1),
             nn.BatchNorm2d(512),
             nn.SiLU(),
             
-            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            # Upsample to larger spatial dimensions for YOLO
+            nn.Upsample(size=(160, 160), mode='bilinear', align_corners=True),
+            
+            # Spatial feature processing with residual connection
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.SiLU(),
+            
+            # Progressive channel reduction while maintaining spatial information
+            nn.Conv2d(512, 256, kernel_size=1),
             nn.BatchNorm2d(256),
             nn.SiLU(),
             
-            # Final adaptation to match YOLO input
-            nn.Conv2d(256, 128, kernel_size=1),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
             nn.SiLU(),
             
-            nn.Conv2d(128, 3, kernel_size=1),
+            # Final adaptation to match YOLO input (3 channels)
+            nn.Conv2d(128, 64, kernel_size=1),
+            nn.BatchNorm2d(64),
+            nn.SiLU(),
+            
+            nn.Conv2d(64, 3, kernel_size=3, padding=1),
             nn.BatchNorm2d(3),
             nn.SiLU()
         )
         
-        self.yolo = yolo_v11_n(num_classes=num_classes)
+        # First create with 80 classes (COCO default)
+        self.yolo = yolo_model
         
     def forward(self, x):
-        """
-        Forward pass returning predictions.
-        Args:
-            x: Backbone features [B, C, H, W]
-        Returns:
-            tuple: (pred_boxes, pred_scores) where:
-                pred_boxes: [B, 4, HW] tensor of predicted boxes
-                pred_scores: [B, num_classes, HW] tensor of class scores
-        """
-        # Apply feature adaptation
+        print(f"Input to adapter: {x.shape}")
         x = self.adapter(x)
-        
-        # Normalize while preserving feature relationships
+        print(f"After adapter: {x.shape}")
         x = x - x.mean(dim=(2, 3), keepdim=True)
         x = x / (x.std(dim=(2, 3), keepdim=True) + 1e-6)
-        x = torch.sigmoid(x)  # Bound to [0,1] while preserving gradients better than min-max
-        
-        # Get predictions from YOLO
-        return self.yolo(x)
+        x = torch.sigmoid(x)
+        print(f"Before YOLO: {x.shape}")
+        darknet_features = self.yolo.net(x)
+        print(f"DarkNet outputs: {[f.shape for f in darknet_features]}")
+        x = self.yolo.fpn(darknet_features)
+        print(f"FPN outputs: {[f.shape for f in x]}")
+        return self.yolo.head(list(x))
 
-        
+            
         # TODO: If inference, process detections
         # processed_detections = []
         # for detection in detections:
         #     processed = self._process_detection(detection)
         #     processed_detections.append(processed)
         # return processed_detections
+
+def modify_yolo(model_path):
+    print("Loading YOLO model...")
+    model = torch.load(str(model_path), map_location='cpu', weights_only=False)
+    print(f"\nCheckpoint type: {type(model)}")
+    
+    # Extract model
+    if isinstance(model, dict):
+        if 'model' in model:
+            print("Found 'model' key in checkpoint")
+            model = model['model']
+
+    width = [3, 16, 32, 64, 128, 256]
+    new_head = Head(nc=1, filters=(width[3], width[4], width[5]))
+
+    for i in range(len(model.head.box)):
+        new_head.box[i].load_state_dict(model.head.box[i].state_dict())
+
+    for i in range(len(model.head.cls)):
+        # Transfer all layers except the final classification layer
+        for j in range(len(new_head.cls[i]) - 1):
+            new_head.cls[i][j].load_state_dict(model.head.cls[i][j].state_dict())
+
+    model.head = new_head
+    
+    return CustomYOLO(model)
 
 
 def create_yolo_branches(
@@ -106,55 +129,16 @@ def create_yolo_branches(
     device: str = 'cpu'
 ) -> Tuple[CustomYOLO, CustomYOLO]:
     """Create YOLO branches for person and face detection."""
+
     # Person detection (1 class - person)
-    person_detect_branch = CustomYOLO(num_classes=1, backbone_channels=2048)
     person_model_path = component_models_dir / "yolo11n.pt"
-    if person_model_path.exists():
-        try:
-            # Try loading the model directly
-            ckpt = torch.load(str(person_model_path), map_location='cpu')
-            if 'model' in ckpt:
-                ckpt = ckpt['model']
-            if hasattr(ckpt, 'float'):
-                ckpt = ckpt.float()
-            # Try to load state dict, ignoring missing and unexpected keys
-            missing_keys, unexpected_keys = person_detect_branch.yolo.load_state_dict(
-                ckpt.state_dict() if hasattr(ckpt, 'state_dict') else ckpt,
-                strict=False
-            )
-            print(f"Loaded person detection model. Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
-        except Exception as e:
-            print(f"Warning: Failed to load person detection model: {e}")
-            # Download from the original repo if local file fails
-            import urllib.request
-            url = "https://github.com/jahongir7174/YOLOv11-pt/releases/download/v0.0.1/v11_n.pt"
-            print(f"Downloading YOLO model from {url}")
-            urllib.request.urlretrieve(url, person_model_path)
-            # Try loading again
-            ckpt = torch.load(str(person_model_path), map_location='cpu', weights_only=False)
-            if 'model' in ckpt:
-                ckpt = ckpt['model']
-            person_detect_branch.yolo.load_state_dict(ckpt.state_dict(), strict=False)
-    
-    # Face detection (1 class - face)
-    face_detect_branch = CustomYOLO(num_classes=1, backbone_channels=2048)
-    face_model_path = component_models_dir / "yolov11n-face.pt"
-    if face_model_path.exists():
-        try:
-            # Try loading the model directly
-            ckpt = torch.load(str(face_model_path), map_location='cpu', weights_only=False)
-            if 'model' in ckpt:
-                ckpt = ckpt['model']
-            if hasattr(ckpt, 'float'):
-                ckpt = ckpt.float()
-            # Try to load state dict, ignoring missing and unexpected keys
-            missing_keys, unexpected_keys = face_detect_branch.yolo.load_state_dict(
-                ckpt.state_dict() if hasattr(ckpt, 'state_dict') else ckpt,
-                strict=False
-            )
-            print(f"Loaded face detection model. Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
-        except Exception as e:
-            print(f"Warning: Failed to load face detection model: {e}")
+    person_detect_branch = modify_yolo(person_model_path)
+    print("Initialized new classification head for person detection")
+
+    # face detection (1 class - face)
+    face_model_path = component_models_dir / "yolo11n.pt"
+    face_detect_branch = modify_yolo(face_model_path)
+    print("Initialized new classification head for person detection")
     
     if save_components:
         torch.save(person_detect_branch.state_dict(), edited_components_dir / "custom_yolo.pth")
@@ -207,7 +191,7 @@ class CustomAdaFace(nn.Module):
         # Load the complete pre-trained AdaFace model
         self.adaface_model = build_model(model_name=config.arch)
         
-        checkpoint = torch.load(pretrained_path)
+        checkpoint = torch.load(pretrained_path, weights_only=False)
         if 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
         else:

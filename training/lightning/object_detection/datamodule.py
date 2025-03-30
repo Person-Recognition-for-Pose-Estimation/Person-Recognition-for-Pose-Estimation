@@ -58,12 +58,11 @@ class DetectionDataset(Dataset):
                 min_height=image_size,
                 min_width=image_size,
                 border_mode=cv2.BORDER_CONSTANT,
-                value=(114, 114, 114)
+                # value=(114, 114, 114)
             ),
             A.OneOf([
                 A.RandomResizedCrop(
-                    height=image_size,
-                    width=image_size,
+                    size=(image_size, image_size),  # (height, width)
                     scale=(0.8, 1.0),
                     ratio=(0.8, 1.2),
                 ),
@@ -210,6 +209,8 @@ class BaseDetectionDataModule(pl.LightningDataModule):
                 self.image_size,
                 augment=False
             )
+
+            print("train_img_dir", train_img_dir)
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(

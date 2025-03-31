@@ -39,6 +39,7 @@ class FaceRecognitionModule(pl.LightningModule):
         super().__init__()
         self.model = model
         self.model.set_task('face_recognition')
+        self.validation_step_outputs = []
         
         # Save hyperparameters
         self.save_hyperparameters(ignore=['model'])
@@ -120,6 +121,9 @@ class FaceRecognitionModule(pl.LightningModule):
         # Calculate loss and accuracy
         loss = F.cross_entropy(output, labels)
         acc = (output.max(1)[1] == labels).float().mean()
+
+
+        self.validation_step_outputs.append(loss)
         
         # Log metrics
         self.log('val_loss', loss, prog_bar=True)
@@ -127,13 +131,16 @@ class FaceRecognitionModule(pl.LightningModule):
         
         return {'val_loss': loss, 'val_acc': acc}
     
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         """Called at the end of validation"""
+        outputs = torch.stack(self.validation_step_outputs)
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
         
         self.log('val/loss', avg_loss, prog_bar=True)
         self.log('val/acc', avg_acc, prog_bar=True)
+
+        self.validation_step_outputs.clear()
     
     def configure_optimizers(self):
         """Configure optimizers"""

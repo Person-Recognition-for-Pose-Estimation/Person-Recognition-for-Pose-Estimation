@@ -1,0 +1,11 @@
+{
+    "configurations": [
+        {
+            "name": "rr trainer",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "training/round_robin_trainer.py",
+            "args": [],
+        }
+    ]
+}

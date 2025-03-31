@@ -5,41 +5,76 @@ import torch  # type: ignore
 import math
 import torchvision  # type: ignore
 
-def compute_iou(box1, box2, eps=1e-7):
+def compute_iou(box1, box2, eps=1e-7, CIoU=False):
     """
-    Returns Intersection over Union (IoU) of box1(1,4) to box2(n,4)
+    Returns Intersection over Union (IoU) of box1(N,4) to box2(M,4)
     
     Args:
-        box1: First box coordinates [x1, y1, x2, y2]
-        box2: Second box coordinates [x1, y1, x2, y2]
+        box1: First box coordinates [N, 4] in [x1, y1, x2, y2] format
+        box2: Second box coordinates [M, 4] in [x1, y1, x2, y2] format
         eps: Small value to prevent division by zero
+        CIoU: Whether to compute CIoU instead of IoU
         
     Returns:
-        IoU scores
+        IoU scores [N, M]
     """
+    # Expand dimensions to compute IoU between all pairs of boxes
+    # box1: [N, 4] -> [N, 1, 4]
+    # box2: [M, 4] -> [1, M, 4]
+    box1 = box1.unsqueeze(1)  # [N, 1, 4]
+    box2 = box2.unsqueeze(0)  # [1, M, 4]
+    
     # Get the coordinates of bounding boxes
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1.chunk(4, -1)
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2.chunk(4, -1)
-    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
-    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1.split(1, dim=-1)  # [N, 1, 1] each
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2.split(1, dim=-1)  # [1, M, 1] each
+    
+    # Calculate width and height
+    w1 = b1_x2 - b1_x1
+    h1 = b1_y2 - b1_y1
+    w2 = b2_x2 - b2_x1
+    h2 = b2_y2 - b2_y1
+    
+    # Calculate area
+    area1 = (w1.clamp(min=0) * h1.clamp(min=0))  # [N, 1, 1]
+    area2 = (w2.clamp(min=0) * h2.clamp(min=0))  # [1, M, 1]
 
     # Intersection area
-    inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp(0) * \
-            (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp(0)
+    inter_x1 = torch.maximum(b1_x1, b2_x1)
+    inter_y1 = torch.maximum(b1_y1, b2_y1)
+    inter_x2 = torch.minimum(b1_x2, b2_x2)
+    inter_y2 = torch.minimum(b1_y2, b2_y2)
+    
+    inter_w = (inter_x2 - inter_x1).clamp(min=0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0)
+    inter_area = inter_w * inter_h  # [N, M, 1]
 
     # Union Area
-    union = w1 * h1 + w2 * h2 - inter + eps
-
+    union = area1 + area2 - inter_area + eps
+    
     # IoU
-    iou = inter / union
-    cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex width
-    ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-    c2 = cw ** 2 + ch ** 2 + eps  # convex diagonal squared
-    rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # center dist ** 2
-    v = (4 / math.pi ** 2) * (torch.atan(w2 / h2) - torch.atan(w1 / h1)).pow(2)
+    iou = inter_area / union
+    
+    if not CIoU:
+        return iou.squeeze(-1)  # Remove last singleton dimension
+    
+    # Complete IoU
+    cw = torch.maximum(b1_x2, b2_x2) - torch.minimum(b1_x1, b2_x1)  # convex width
+    ch = torch.maximum(b1_y2, b2_y2) - torch.minimum(b1_y1, b2_y1)  # convex height
+    c2 = (cw ** 2 + ch ** 2) + eps  # convex diagonal squared
+    
+    # Center distance squared
+    rho2 = ((b1_x1 + b1_x2 - b2_x1 - b2_x2) ** 2 + 
+            (b1_y1 + b1_y2 - b2_y1 - b2_y2) ** 2) / 4
+    
+    # Aspect ratio consistency
+    v = (4 / (math.pi ** 2)) * torch.pow(
+        torch.atan(w2 / (h2 + eps)) - torch.atan(w1 / (h1 + eps)), 2
+    )
+    
     with torch.no_grad():
         alpha = v / (v - iou + (1 + eps))
-    return iou - (rho2 / c2 + v * alpha)  # CIoU
+    
+    return (iou - (rho2 / c2 + v * alpha)).squeeze(-1)  # CIoU
 
 def make_anchors(x, strides, offset=0.5):
     """

@@ -51,46 +51,39 @@ class DetectionDataset(Dataset):
             else:
                 self.labels[img_file] = np.zeros((0, 5), dtype=np.float32)
 
-        # Setup augmentations
+        # Setup minimal augmentations - just resize and basic transforms
         self.transform = A.Compose([
-            A.LongestMaxSize(max_size=image_size),
-            A.PadIfNeeded(
-                min_height=image_size,
-                min_width=image_size,
-                border_mode=cv2.BORDER_CONSTANT,
-                # value=(114, 114, 114)
+            # Simple resize to target size
+            A.Resize(
+                height=image_size,
+                width=image_size,
+                always_apply=True
             ),
-            A.OneOf([
-                A.RandomResizedCrop(
-                    size=(image_size, image_size),  # (height, width)
-                    scale=(0.8, 1.0),
-                    ratio=(0.8, 1.2),
-                ),
-                A.Resize(height=image_size, width=image_size),
-            ], p=1.0),
-        ] + ([  # Additional augmentations only during training
-            A.HorizontalFlip(p=0.5),
-            A.RandomBrightnessContrast(p=0.2),
-            A.RGBShift(p=0.2),
-            A.HueSaturationValue(p=0.2),
-            A.GaussNoise(p=0.2),
-            A.MotionBlur(p=0.2),
-        ] if augment else []), 
+            # Only horizontal flip during training
+            A.HorizontalFlip(p=0.5) if augment else A.NoOp(),
+        ], 
         bbox_params=A.BboxParams(
-            format='yolo',
+            format='yolo',  # YOLO format: [x_center, y_center, width, height]
             label_fields=['class_labels']
         ))
 
-        # Normalization as a separate transform (always applied)
+        # Simple YOLO-style normalization (just divide by 255)
         self.normalize = A.Compose([
             A.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
+                mean=[0, 0, 0],
+                std=[255, 255, 255],
+                max_pixel_value=255.0
             ),
         ])
 
     def __len__(self) -> int:
         return len(self.img_files)
+
+    @staticmethod
+    def clip_boxes(boxes: np.ndarray) -> np.ndarray:
+        """Clip box coordinates to [0, 1] range with a small epsilon to avoid edge cases"""
+        epsilon = 1e-6
+        return np.clip(boxes, epsilon, 1.0 - epsilon)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         # Load image
@@ -99,25 +92,67 @@ class DetectionDataset(Dataset):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # Get labels
-        labels = self.labels[img_file]
+        labels = self.labels[img_file].copy()  # Make a copy to avoid modifying original data
         
-        # Apply augmentations
-        transformed = self.transform(
-            image=img,
-            bboxes=labels[:, 1:] if len(labels) else [],
-            class_labels=labels[:, 0] if len(labels) else []
-        )
-        
-        img = transformed['image']
-        
-        # Create target dict
-        if len(transformed['bboxes']):
-            boxes = np.array(transformed['bboxes'])  # [N, 4]
-            classes = np.array(transformed['class_labels'])  # [N]
+        # Prepare boxes and classes separately for albumentations
+        if len(labels) > 0:
+            classes = labels[:, 0]
+            boxes = labels[:, 1:5]  # Get just the bbox coordinates
+            
+            # Strict validation of box coordinates - ensure all are in [0,1] range
+            valid_indices = []
+            for i, box in enumerate(boxes):
+                # Check if all values are within valid range and not NaN/Inf
+                if (np.all(box >= 0) and np.all(box <= 1) and 
+                    not np.any(np.isnan(box)) and not np.any(np.isinf(box))):
+                    valid_indices.append(i)
+            
+            # Filter to only valid boxes
+            if len(valid_indices) < len(boxes):
+                print(f"Warning: Filtered out {len(boxes) - len(valid_indices)} invalid boxes for {img_file.name}")
+                boxes = boxes[valid_indices]
+                classes = classes[valid_indices]
+            
+            # Additional safety - clip values to ensure they're in the valid range
+            boxes = np.clip(boxes, 0.001, 0.999)
+            
+            # Ensure width and height are not zero
+            boxes[:, 2] = np.maximum(boxes[:, 2], 0.01)  # width
+            boxes[:, 3] = np.maximum(boxes[:, 3], 0.01)  # height
+            
+            # Make sure center + half width/height doesn't exceed boundaries
+            boxes[:, 0] = np.minimum(boxes[:, 0], 1.0 - boxes[:, 2]/2)  # x center
+            boxes[:, 1] = np.minimum(boxes[:, 1], 1.0 - boxes[:, 3]/2)  # y center
+            boxes[:, 0] = np.maximum(boxes[:, 0], boxes[:, 2]/2)  # x center
+            boxes[:, 1] = np.maximum(boxes[:, 1], boxes[:, 3]/2)  # y center
         else:
             boxes = np.zeros((0, 4), dtype=np.float32)
             classes = np.zeros(0, dtype=np.float32)
-
+        
+        # Apply augmentations
+        try:
+            transformed = self.transform(
+                image=img,
+                bboxes=boxes if len(boxes) else [],
+                class_labels=classes if len(classes) else []
+            )
+            
+            img = transformed['image']
+            
+            # Create target dict
+            if len(transformed['bboxes']):
+                boxes = np.array(transformed['bboxes'])  # [N, 4]
+                classes = np.array(transformed['class_labels'])  # [N]
+            else:
+                boxes = np.zeros((0, 4), dtype=np.float32)
+                classes = np.zeros(0, dtype=np.float32)
+        except Exception as e:
+            print(f"Error in transform for {img_file}: {e}")
+            print(f"Original boxes: {boxes}")
+            # Fallback to empty boxes
+            boxes = np.zeros((0, 4), dtype=np.float32)
+            classes = np.zeros(0, dtype=np.float32)
+        
         # Apply normalization
         img = self.normalize(image=img)['image']
         

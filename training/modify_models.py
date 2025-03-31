@@ -74,26 +74,84 @@ class CustomYOLO(nn.Module):
         self.yolo = yolo_model
         
     def forward(self, x):
-        print(f"Input to adapter: {x.shape}")
+        print("\n=== CustomYOLO Forward Pass ===")
+        print(f"Input shape: {x.shape}")
+        
+        # Adapter network
         x = self.adapter(x)
-        print(f"After adapter: {x.shape}")
+        print(f"After adapter shape: {x.shape}")
+        
         x = x - x.mean(dim=(2, 3), keepdim=True)
         x = x / (x.std(dim=(2, 3), keepdim=True) + 1e-6)
         x = torch.sigmoid(x)
-        print(f"Before YOLO: {x.shape}")
+        print(f"After normalization shape: {x.shape}")
+        
+        # YOLO backbone and FPN
         darknet_features = self.yolo.net(x)
-        print(f"DarkNet outputs: {[f.shape for f in darknet_features]}")
-        x = self.yolo.fpn(darknet_features)
-        print(f"FPN outputs: {[f.shape for f in x]}")
-        return self.yolo.head(list(x))
-
+        print(f"DarkNet output shapes: {[f.shape for f in darknet_features]}")
+        
+        fpn_features = self.yolo.fpn(darknet_features)
+        print(f"FPN output shapes: {[f.shape for f in fpn_features]}")
+        
+        head_output = self.yolo.head(list(fpn_features))
+        if isinstance(head_output, list):
+            print(f"Head output (training): {[h.shape for h in head_output]}")
+        else:
+            print(f"Head output (inference) shape: {head_output.shape}")
+        
+        if self.training:
+            return head_output  # List of feature maps for training
+        else:
+            # Process predictions into boxes and scores
+            return self.process_predictions(head_output)
             
-        # TODO: If inference, process detections
-        # processed_detections = []
-        # for detection in detections:
-        #     processed = self._process_detection(detection)
-        #     processed_detections.append(processed)
-        # return processed_detections
+    def process_predictions(self, predictions):
+        """Process YOLO predictions into boxes and scores."""
+        print("\n=== Processing Predictions ===")
+        print(f"Input predictions type: {type(predictions)}")
+        if isinstance(predictions, list):
+            print("Processing training mode predictions")
+            # Training mode - process feature maps
+            all_boxes = []
+            all_scores = []
+            for i, feat_map in enumerate(predictions):
+                print(f"\nFeature map {i} shape: {feat_map.shape}")
+                # Split predictions into boxes and scores
+                boxes = feat_map[..., :4]  # First 4 channels are box predictions
+                scores = feat_map[..., 4:]  # Remaining channels are class scores
+                print(f"Split shapes - boxes: {boxes.shape}, scores: {scores.shape}")
+                
+                # Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2]
+                boxes = self.convert_boxes_cxcywh_to_xyxy(boxes)
+                print(f"After conversion - boxes shape: {boxes.shape}")
+                
+                all_boxes.append(boxes)
+                all_scores.append(scores)
+            
+            # Concatenate predictions from all feature levels
+            pred_boxes = torch.cat(all_boxes, dim=1)
+            pred_scores = torch.cat(all_scores, dim=1)
+            print(f"\nFinal concatenated shapes - boxes: {pred_boxes.shape}, scores: {pred_scores.shape}")
+            
+            final_output = torch.cat([pred_boxes, pred_scores], dim=1)
+            print(f"Final output shape: {final_output.shape}")
+            return final_output
+        else:
+            print("Processing inference mode predictions")
+            print(f"Predictions shape: {predictions.shape}")
+            return predictions
+            
+    def convert_boxes_cxcywh_to_xyxy(self, boxes):
+        """Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2] format"""
+        if boxes.size(-1) != 4:
+            boxes = boxes.transpose(-1, -2)  # Move channels to last dimension if needed
+            
+        cx, cy, w, h = boxes.unbind(-1)
+        x1 = cx - w/2
+        y1 = cy - h/2
+        x2 = cx + w/2
+        y2 = cy + h/2
+        return torch.stack([x1, y1, x2, y2], dim=-1)
 
 def modify_yolo(model_path):
     print("Loading YOLO model...")

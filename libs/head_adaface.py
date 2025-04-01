@@ -45,7 +45,7 @@ def l2_norm(input,axis=1):
 class AdaFace(Module):
     def __init__(self,
                  embedding_size=512,
-                 classnum=70722,
+                 classnum=85742,
                  m=0.4,
                  h=0.333,
                  s=64.,

@@ -226,19 +226,24 @@ class CustomAdaFace(nn.Module):
     def __init__(self, pretrained_path, config, backbone_channels=2048):
         super(CustomAdaFace, self).__init__()
         
-        # Define adapter network
+        # Define adapter network for backbone features (2048 channels)
         self.adapter = nn.Sequential(
-            # Initial channel reduction and processing
-            nn.Conv2d(backbone_channels, 256, kernel_size=1),
+            # Initial channel reduction
+            nn.Conv2d(backbone_channels, 512, kernel_size=1),  # 1x1 conv for channel reduction
+            nn.BatchNorm2d(512),
+            nn.PReLU(512),
+            
+            # Spatial upsampling to match AdaFace input size (112x112)
+            nn.Upsample(size=(112, 112), mode='bilinear', align_corners=True),
+            
+            # Feature processing after upsampling
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
             nn.BatchNorm2d(256),
-            nn.PReLU(256),  # AdaFace uses PReLU
+            nn.PReLU(256),
             
             nn.Conv2d(256, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
             nn.PReLU(128),
-            
-            # Adaptive pooling to get consistent spatial dimensions
-            nn.AdaptiveAvgPool2d((112, 112)),  # Common input size for face recognition
             
             # Final adaptation to match AdaFace input
             nn.Conv2d(128, 64, kernel_size=3, padding=1),
@@ -296,9 +301,9 @@ class Config:
     def __init__(self):
         self.arch = 'ir_50'
         self.head = 'adaface'
-        self.num_classes = 70722
-        self.embedding_size: int = 512,
-        self.backbone_channels: int = 2048,
+        self.num_classes = 85742  # Updated to match actual number of identities
+        self.embedding_size = 512
+        self.backbone_channels = 2048
         self.m = 0.4
         self.h = 0.333
         self.t_alpha = 0.01

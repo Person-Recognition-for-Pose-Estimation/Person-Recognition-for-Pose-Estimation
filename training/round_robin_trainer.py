@@ -140,12 +140,39 @@ class RoundRobinTrainer:
                     config={**self.base_config, **task.module_config}
                 )
             
-            # Setup callbacks
-            callbacks = ModelCheckpoint(
+            # Setup callbacks based on task type
+            if task.name in ['face_detection', 'person_detection']:
+                callbacks = ModelCheckpoint(
                     dirpath=str(self.checkpoint_dir / task.name),
                     filename=f"{task.name}-{{epoch:02d}}-{{val_mAP50-95:.2f}}",
                     monitor="val/mAP50-95",
                     mode="max",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
+            elif task.name == 'face_recognition':
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}-{{val_acc:.2f}}",
+                    monitor="val_acc",
+                    mode="max",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
+            elif task.name == 'pose_estimation':
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}-{{val_pck:.2f}}",
+                    monitor="val_pck",
+                    mode="max",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
+            else:
+                # Default checkpoint configuration
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}",
                     save_top_k=3,
                     every_n_epochs=self.base_config.get("save_period", 1)
                 )
@@ -286,6 +313,8 @@ def main():
     parser.add_argument('--resume-checkpoint', type=str, help='Path to checkpoint to resume training from')
     parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('/home/ubuntu/thesis/coco'),
                       help='Path to COCO dataset directory. Default: /home/ubuntu/thesis/coco')
+    parser.add_argument('--max-samples-per-epoch-train', type=int, default=1000)
+    parser.add_argument('--max-samples-per-epoch-val', type=int, default=200)
     
     # # Face detection arguments
     parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/',
@@ -322,43 +351,47 @@ def main():
     
     # Task configurations
     tasks = [
-        # # Face Detection Task
-        # TaskConfig(
-        #     name="face_detection",
-        #     module_class=FaceDetectionModule,
-        #     datamodule_class=FaceDetectionDataModule,
-        #     data_config={
-        #         "data_dir": args.face_det_data_dir,
-        #         "batch_size": args.batch_size,
-        #         "image_size": 640,
-        #         "num_workers": base_config["workers"],
-        #         "pin_memory": True
-        #     },
-        #     module_config={
-        #         "learning_rate": args.learning_rate,
-        #         "weight_decay": base_config.get("weight_decay", 0.0005),
-        #     },
-        #     wandb_project="yolo-face-detection"
-        # ),
+        # Face Detection Task
+        TaskConfig(
+            name="face_detection",
+            module_class=FaceDetectionModule,
+            datamodule_class=FaceDetectionDataModule,
+            data_config={
+                "data_dir": args.face_det_data_dir,
+                "batch_size": args.batch_size,
+                "image_size": 640,
+                "num_workers": base_config["workers"],
+                "pin_memory": True,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
+            },
+            module_config={
+                "learning_rate": args.learning_rate,
+                "weight_decay": base_config.get("weight_decay", 0.0005),
+            },
+            wandb_project="yolo-face-detection"
+        ),
         
-        # # Person Detection Task
-        # TaskConfig(
-        #     name="person_detection",
-        #     module_class=PersonDetectionModule,
-        #     datamodule_class=PersonDetectionDataModule,
-        #     data_config={
-        #         "data_dir": args.coco_dir,
-        #         "batch_size": args.batch_size,
-        #         "image_size": 640,
-        #         "num_workers": base_config["workers"],
-        #         "pin_memory": True
-        #     },
-        #     module_config={
-        #         "learning_rate": args.learning_rate,
-        #         "weight_decay": base_config.get("weight_decay", 0.0005),
-        #     },
-        #     wandb_project="yolo-person-detection"
-        # ),
+        # Person Detection Task
+        TaskConfig(
+            name="person_detection",
+            module_class=PersonDetectionModule,
+            datamodule_class=PersonDetectionDataModule,
+            data_config={
+                "data_dir": args.coco_dir,
+                "batch_size": args.batch_size,
+                "image_size": 640,
+                "num_workers": base_config["workers"],
+                "pin_memory": True,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
+            },
+            module_config={
+                "learning_rate": args.learning_rate,
+                "weight_decay": base_config.get("weight_decay", 0.0005),
+            },
+            wandb_project="yolo-person-detection"
+        ),
         
         # Face Recognition Task
         TaskConfig(
@@ -366,9 +399,11 @@ def main():
             module_class=FaceRecognitionModule,
             datamodule_class=FaceRecognitionDataModule,
             data_config={
-                "data_dir": os.path.dirname(args.face_data_dir),
+                "data_dir": args.face_data_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
                 # "num_classes": args.face_num_classes,
@@ -392,8 +427,8 @@ def main():
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
                 "img_size": args.pose_img_size,
-                "max_samples_per_epoch_train": 1000,
-                "max_samples_per_epoch_val": 200,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
                 "learning_rate": args.learning_rate,

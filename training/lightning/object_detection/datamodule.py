@@ -4,6 +4,7 @@ Base data module for object detection tasks (face and person detection).
 import os
 import cv2
 import torch
+import random
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -11,6 +12,28 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 import albumentations as A
 from PIL import Image
+
+
+class LimitedDataset(Dataset):
+    """Wrapper dataset that limits the number of samples per epoch."""
+    def __init__(self, dataset: Dataset, max_samples: int):
+        self.dataset = dataset
+        self.max_samples = max_samples
+        self.indices = list(range(len(dataset)))
+        self.shuffle_indices()
+        
+    def shuffle_indices(self):
+        """Shuffle indices at the start of each epoch"""
+        random.shuffle(self.indices)
+        self.indices = self.indices[:self.max_samples]
+    
+    def __len__(self):
+        return min(self.max_samples, len(self.dataset))
+    
+    def __getitem__(self, idx):
+        if idx >= len(self):
+            raise IndexError("Index out of bounds")
+        return self.dataset[self.indices[idx]]
 
 class DetectionDataset(Dataset):
     """Base dataset for object detection tasks."""
@@ -211,7 +234,9 @@ class BaseDetectionDataModule(pl.LightningDataModule):
         batch_size: int = 16,
         image_size: int = 640,
         num_workers: int = 4,
-        pin_memory: bool = True
+        pin_memory: bool = True,
+        max_samples_per_epoch_train: int = 1000,
+        max_samples_per_epoch_val: int = 200
     ):
         super().__init__()
         self.data_dir = Path(data_dir)
@@ -219,6 +244,8 @@ class BaseDetectionDataModule(pl.LightningDataModule):
         self.image_size = image_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.max_samples_per_epoch_train = max_samples_per_epoch_train
+        self.max_samples_per_epoch_val = max_samples_per_epoch_val
 
     def _get_data_dirs(self, split: str) -> Tuple[str, str]:
         """Get image and label directories for a given split."""
@@ -232,18 +259,28 @@ class BaseDetectionDataModule(pl.LightningDataModule):
             train_img_dir, train_label_dir = self._get_data_dirs('train')
             val_img_dir, val_label_dir = self._get_data_dirs('val')
 
-            self.train_dataset = DetectionDataset(
+            train_dataset_full = DetectionDataset(
                 train_img_dir,
                 train_label_dir,
                 self.image_size,
                 augment=True
             )
-            self.val_dataset = DetectionDataset(
+            val_dataset_full = DetectionDataset(
                 val_img_dir,
                 val_label_dir,
                 self.image_size,
                 augment=False
             )
+            
+            # Wrap datasets with LimitedDataset
+            self.train_dataset = LimitedDataset(train_dataset_full, self.max_samples_per_epoch_train)
+            self.val_dataset = LimitedDataset(val_dataset_full, self.max_samples_per_epoch_val)
+            
+            print(f"\nDataset sizes after limiting:")
+            print(f"Training samples per epoch: {len(self.train_dataset)}")
+            print(f"Validation samples per epoch: {len(self.val_dataset)}")
+            print(f"Expected training batches: {len(self.train_dataset) // self.batch_size}")
+            print(f"Expected validation batches: {len(self.val_dataset) // self.batch_size}\n")
 
             print("train_img_dir", train_img_dir)
 
@@ -266,3 +303,10 @@ class BaseDetectionDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             collate_fn=DetectionDataset.collate_fn
         )
+        
+    def on_epoch_end(self):
+        """Called at the end of every epoch to reshuffle indices"""
+        if hasattr(self, 'train_dataset'):
+            self.train_dataset.shuffle_indices()
+        if hasattr(self, 'val_dataset'):
+            self.val_dataset.shuffle_indices()

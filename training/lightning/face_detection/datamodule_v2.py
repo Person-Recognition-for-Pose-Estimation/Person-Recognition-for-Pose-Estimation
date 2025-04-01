@@ -13,7 +13,9 @@ class FaceDetectionDataModule(BaseDetectionDataModule):
         batch_size: int = 16,
         image_size: int = 640,
         num_workers: int = 4,
-        pin_memory: bool = True
+        pin_memory: bool = True,
+        max_samples_per_epoch_train: int = 1000,
+        max_samples_per_epoch_val: int = 200
     ):
         """
         Initialize face detection data module.
@@ -30,7 +32,9 @@ class FaceDetectionDataModule(BaseDetectionDataModule):
             batch_size=batch_size,
             image_size=image_size,
             num_workers=num_workers,
-            pin_memory=pin_memory
+            pin_memory=pin_memory,
+            max_samples_per_epoch_train = max_samples_per_epoch_train,
+            max_samples_per_epoch_val = max_samples_per_epoch_val
         )
         
     def _get_data_dirs(self, split: str):

@@ -11,7 +11,7 @@ class FaceRecognitionModule(pl.LightningModule):
     def __init__(
         self,
         model,
-        num_classes: int = 70722,  # Default from MS1MV2
+        num_classes: int = 85742,  # Default from MS1MV2
         embedding_size: int = 512,
         learning_rate: float = 0.001,
         weight_decay: float = 0.0005,
@@ -60,10 +60,20 @@ class FaceRecognitionModule(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """Single training step"""
-        images, labels = batch
-        
-        # Get embeddings and norms from model
-        embeddings, norms = self.model.ada_face(images)
+        if isinstance(batch, dict):
+            images = batch['image']
+            labels = batch['label']
+        else:
+            images, labels = batch
+            
+        # Ensure inputs are tensors and properly formatted
+        if not isinstance(images, torch.Tensor):
+            images = torch.tensor(images)
+        if images.dtype != torch.float32:
+            images = images.float()
+            
+        # Get embeddings and norms from model through the backbone
+        embeddings, norms = self.model(images)
         
         # Update batch statistics
         with torch.no_grad():
@@ -79,7 +89,8 @@ class FaceRecognitionModule(pl.LightningModule):
         margin_scaler = torch.clip(margin_scaler, -1, 1)
         
         # Calculate adaptive margin
-        cosine = F.linear(F.normalize(embeddings), F.normalize(self.model.ada_face.head.kernel))
+        kernel = F.normalize(self.model.ada_face.head.kernel)
+        cosine = F.linear(F.normalize(embeddings), kernel.t())  # transpose kernel for correct matrix multiplication
         cosine = cosine.clamp(-1 + 1e-7, 1 - 1e-7)
         
         # One-hot encoding for labels
@@ -107,13 +118,24 @@ class FaceRecognitionModule(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         """Single validation step"""
-        images, labels = batch
-        
-        # Get embeddings
-        embeddings, norms = self.model.ada_face(images)
+        if isinstance(batch, dict):
+            images = batch['image']
+            labels = batch['label']
+        else:
+            images, labels = batch
+            
+        # Ensure inputs are tensors and properly formatted
+        if not isinstance(images, torch.Tensor):
+            images = torch.tensor(images)
+        if images.dtype != torch.float32:
+            images = images.float()
+            
+        # Get embeddings through the backbone
+        embeddings, norms = self.model(images)
         
         # Calculate cosine similarities
-        cosine = F.linear(F.normalize(embeddings), F.normalize(self.model.ada_face.head.kernel))
+        kernel = F.normalize(self.model.ada_face.head.kernel)
+        cosine = F.linear(F.normalize(embeddings), kernel.t())  # transpose kernel for correct matrix multiplication
         
         # Scale
         output = cosine * self.hparams.s
@@ -122,24 +144,33 @@ class FaceRecognitionModule(pl.LightningModule):
         loss = F.cross_entropy(output, labels)
         acc = (output.max(1)[1] == labels).float().mean()
 
-
-        self.validation_step_outputs.append(loss)
+        # Create output dictionary
+        output_dict = {'val_loss': loss, 'val_acc': acc}
+        
+        # Append to validation outputs
+        self.validation_step_outputs.append(output_dict)
         
         # Log metrics
         self.log('val_loss', loss, prog_bar=True)
         self.log('val_acc', acc, prog_bar=True)
         
-        return {'val_loss': loss, 'val_acc': acc}
+        return output_dict
     
     def on_validation_epoch_end(self):
         """Called at the end of validation"""
-        outputs = torch.stack(self.validation_step_outputs)
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
+        # Extract losses and accuracies from the validation outputs
+        val_losses = torch.stack([x['val_loss'] for x in self.validation_step_outputs])
+        val_accs = torch.stack([x['val_acc'] for x in self.validation_step_outputs])
         
+        # Calculate means
+        avg_loss = val_losses.mean()
+        avg_acc = val_accs.mean()
+        
+        # Log metrics
         self.log('val/loss', avg_loss, prog_bar=True)
         self.log('val/acc', avg_acc, prog_bar=True)
 
+        # Clear the outputs list
         self.validation_step_outputs.clear()
     
     def configure_optimizers(self):

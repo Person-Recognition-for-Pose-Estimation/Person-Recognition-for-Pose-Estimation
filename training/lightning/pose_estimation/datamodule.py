@@ -59,11 +59,11 @@ class COCOKeypointDataset(Dataset):
         # Setup transform
         self.transform = transform or A.Compose([
             A.LongestMaxSize(max_size=img_size),
-            A.PadIfNeeded(
-                min_height=img_size,
-                min_width=img_size,
-                border_mode=0,
-            ),
+            # A.PadIfNeeded(
+            #     min_height=img_size,
+            #     min_width=img_size,
+            #     border_mode=0,
+            # ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ], keypoint_params=A.KeypointParams(
@@ -191,11 +191,16 @@ class PoseEstimationDataModule(pl.LightningDataModule):
         
         # Define transforms
         self.train_transform = A.Compose([
-            A.RandomResizedCrop(
-                size=(img_size, img_size),  # (height, width)
-                scale=(0.8, 1.0),
-                ratio=(0.8, 1.2),
+            # First resize to square while maintaining aspect ratio
+            A.LongestMaxSize(max_size=img_size),
+            # Then pad to ensure square size
+            A.PadIfNeeded(
+                min_height=img_size,
+                min_width=img_size,
+                border_mode=0,
+                value=0
             ),
+            # Data augmentation
             A.HorizontalFlip(p=0.5),
             A.ColorJitter(
                 brightness=0.2,
@@ -212,11 +217,13 @@ class PoseEstimationDataModule(pl.LightningDataModule):
         ))
         
         self.val_transform = A.Compose([
+            # Same resize and pad strategy for validation
             A.LongestMaxSize(max_size=img_size),
             A.PadIfNeeded(
                 min_height=img_size,
                 min_width=img_size,
                 border_mode=0,
+                value=0
             ),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),

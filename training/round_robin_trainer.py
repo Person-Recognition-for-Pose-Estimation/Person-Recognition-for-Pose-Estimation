@@ -163,8 +163,8 @@ class RoundRobinTrainer:
                 callbacks = ModelCheckpoint(
                     dirpath=str(self.checkpoint_dir / task.name),
                     filename=f"{task.name}-{{epoch:02d}}-{{val_pck:.2f}}",
-                    monitor="val_pck",
-                    mode="max",
+                    monitor="val_loss",
+                    mode="min",
                     save_top_k=3,
                     every_n_epochs=self.base_config.get("save_period", 1)
                 )
@@ -329,8 +329,8 @@ def main():
                       help='Path to face recognition training folder')
     
     # Pose Estimation arguments
-    parser.add_argument('--pose-img-size', type=int, default=256,
-                      help='Image size for pose estimation')
+    parser.add_argument('--pose-img-size', type=tuple, default=640,
+                      help='Image size for pose estimation (width, height)')
     parser.add_argument('--pose-sigma', type=float, default=2.0,
                       help='Gaussian sigma for heatmap generation')
     parser.add_argument('--pose-keypoint-thresh', type=float, default=0.3,
@@ -433,7 +433,7 @@ def main():
             module_config={
                 "learning_rate": args.learning_rate,
                 "weight_decay": base_config.get("weight_decay", 0.0005),
-                "heatmap_size": (args.pose_img_size // 4, args.pose_img_size // 4),  # ViTPose default downscaling
+                "heatmap_size": (64, 48),  # ViTPose output size (H=64, W=48)
                 "sigma": args.pose_sigma,
                 "keypoint_thresh": args.pose_keypoint_thresh,
             },

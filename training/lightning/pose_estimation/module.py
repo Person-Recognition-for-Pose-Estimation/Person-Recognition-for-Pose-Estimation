@@ -11,6 +11,8 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 import numpy as np
 
+from transformers.models.vitpose.modeling_vitpose import VitPoseEstimatorOutput
+
 
 class JointsMSELoss(nn.Module):
     """MSE loss for heatmaps.
@@ -63,7 +65,7 @@ class PoseEstimationModule(pl.LightningModule):
         model,
         learning_rate: float = 0.001,
         weight_decay: float = 0.0005,
-        heatmap_size: tuple = (64, 48),  # From ViTPose config
+        heatmap_size: tuple = (64, 48),  # ViTPose output size (H=64, W=48)
         sigma: float = 2.0,  # Gaussian sigma for heatmap generation
         keypoint_thresh: float = 0.3,  # Threshold for keypoint visibility
     ):
@@ -264,7 +266,10 @@ class PoseEstimationModule(pl.LightningModule):
         )
         
         # Forward pass through backbone and pose branch
-        pred_heatmaps = self.model(images)
+        # pred_heatmaps = self.model(images)
+
+        vit_pose_output: VitPoseEstimatorOutput = self.model(images)
+        pred_heatmaps = vit_pose_output.heatmaps
         
         # Apply online hard example mining (OHEM)
         B, K, H, W = pred_heatmaps.shape
@@ -373,11 +378,16 @@ class PoseEstimationModule(pl.LightningModule):
             # Forward pass with flip test
             with torch.no_grad():
                 # Original forward pass
-                pred_heatmaps = self.model(images)
+                # pred_heatmaps = self.model(images)
+                vit_pose_output: VitPoseEstimatorOutput = self.model(images)
+                pred_heatmaps = vit_pose_output.heatmaps
                 
                 # Flipped forward pass
                 flipped_images = torch.flip(images, dims=[-1])
-                flipped_heatmaps = self.model(flipped_images)
+                flipped_vit_pose_output: VitPoseEstimatorOutput = self.model(flipped_images)
+                flipped_heatmaps = flipped_vit_pose_output.heatmaps
+
+                # print("flipped_heatmaps", flipped_heatmaps)
                 
                 # Process flipped heatmaps
                 flip_pairs = [  # COCO keypoint flip pairs
@@ -396,6 +406,12 @@ class PoseEstimationModule(pl.LightningModule):
             target_heatmaps, target_weights = self._generate_target_heatmap(
                 keypoints[..., :2], keypoints[..., 2], self.heatmap_size
             )
+            
+            # Debug prints
+            print(f"\nPred heatmaps shape: {pred_heatmaps.shape}")
+            print(f"Target heatmaps shape: {target_heatmaps.shape}")
+            print(f"Target weights shape: {target_weights.shape}")
+            print(f"Self.heatmap_size: {self.heatmap_size}")
             
             # Compute loss
             loss = self.criterion(pred_heatmaps, target_heatmaps, target_weights)
@@ -421,7 +437,23 @@ class PoseEstimationModule(pl.LightningModule):
                     # Compute OKS-based confidence
                     box_area = box[2] * box[3]  # width * height
                     d = torch.sqrt(box_area)  # scale
-                    oks_scores = torch.exp(-kpts.square().sum(dim=1) / (2 * d * d * sigmas * sigmas))
+                    # Debug prints
+                    print(f"\nKeypoints shape: {kpts.shape}")
+                    print(f"Scores shape: {scores.shape}")
+                    print(f"Box shape: {box.shape}")
+                    print(f"Sigmas shape: {sigmas.shape}")
+                    
+                    # kpts is [K, 2], sum over coordinate dimension to get squared distance for each keypoint
+                    squared_distances = kpts.square().sum(dim=-1)  # [K]
+                    print(f"Squared distances shape: {squared_distances.shape}")
+                    
+                    # Scale factor
+                    d = torch.sqrt(box_area)  # scale
+                    print(f"Scale d: {d}")
+                    
+                    # Compute OKS scores
+                    oks_scores = torch.exp(-squared_distances / (2 * d * d * sigmas * sigmas))
+                    print(f"OKS scores shape: {oks_scores.shape}")
                     instance_score = (oks_scores * scores).mean()
                     
                     # Only keep predictions with good OKS scores
@@ -489,6 +521,7 @@ class PoseEstimationModule(pl.LightningModule):
                 'val/AP75': coco_eval.stats[2],  # AP @ IoU=0.75
                 'val/APm': coco_eval.stats[3],  # AP medium
                 'val/APl': coco_eval.stats[4],  # AP large
+                'val_pck': coco_eval.stats[0],  # Use AP as PCK for checkpoint monitoring
             }
             
             for name, value in metrics.items():

@@ -332,37 +332,48 @@ def create_adaface_branch(
 
 #################### ViTPose ####################
 
-from transformers import AutoProcessor, VitPoseForPoseEstimation
+from transformers import AutoProcessor, VitPoseForPoseEstimation, VitPoseConfig
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+class Permute(nn.Module):
+    def __init__(self, *dims):
+        super().__init__()
+        self.dims = dims
+
+    def forward(self, x):
+        return x.permute(*self.dims)
 
 
 class CustomVitPose(nn.Module):
     def __init__(self, vit_pose_model: VitPoseForPoseEstimation, backbone_channels=2048):
         super(CustomVitPose, self).__init__()
         
-        hidden_size = vit_pose_model.backbone.config.hidden_size
-        patch_size = vit_pose_model.backbone.config.patch_size
-        
         self.adapter = nn.Sequential(
             # Initial channel reduction
-            nn.Conv2d(backbone_channels, hidden_size * 2, kernel_size=1),
-            nn.LayerNorm([hidden_size * 2]),
+            nn.Conv2d(backbone_channels, 512, kernel_size=1),
+            nn.BatchNorm2d(512),
             nn.GELU(),
             
-            # Spatial processing
-            nn.Conv2d(hidden_size * 2, hidden_size * 2, 
-                     kernel_size=3, padding=1, groups=hidden_size * 2),  # Depth-wise
-            nn.Conv2d(hidden_size * 2, hidden_size, kernel_size=1),  # Point-wise
-            nn.LayerNorm([hidden_size]),
+            # Upsample to ViTPose input size (256x192)
+            nn.Upsample(size=(256, 192), mode='bilinear', align_corners=True),
+            
+            # Progressive channel reduction to 3 channels
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
             nn.GELU(),
             
-            nn.Conv2d(hidden_size, hidden_size, kernel_size=patch_size, 
-                     stride=patch_size, padding=0),  # Match ViT patch size
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.GELU(),
+            
+            # Final adaptation to RGB-like channels
+            nn.Conv2d(128, 3, kernel_size=3, padding=1),
+            nn.BatchNorm2d(3),
+            nn.GELU()
         )
         
         self.vit_pose = vit_pose_model
-        self.vit_pose.backbone.embeddings.patch_embeddings = nn.Identity()
         
         # Freeze normalization layers in ViT for stability
         for module in self.vit_pose.modules():
@@ -380,9 +391,13 @@ def create_vitpose_branch(
     device: str = 'cpu'
 ) -> CustomVitPose:
     """Create ViTPose branch for pose estimation."""
+
+    # config = VitPoseConfig(return_dict=False) 
+
     hf_vit_pose_model = VitPoseForPoseEstimation.from_pretrained(
         "usyd-community/vitpose-base-simple",
-        device_map=device
+        device_map=device,
+        # config=config
     )
     pose_detect_branch = CustomVitPose(hf_vit_pose_model)
     

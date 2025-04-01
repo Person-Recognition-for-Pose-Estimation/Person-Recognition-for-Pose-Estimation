@@ -39,7 +39,7 @@ class COCOKeypointDataset(Dataset):
         self.max_samples = max_samples
         
         # Setup paths
-        self.img_dir = self.data_dir / 'images' / f'{split}2017'
+        self.img_dir = self.data_dir / 'images' / f'{split}'
         ann_file = self.data_dir / 'annotations' / f'person_keypoints_{split}2017.json'
         
         # Load COCO annotations
@@ -160,7 +160,7 @@ class COCOKeypointDataset(Dataset):
             'image_id': img_id
         }
 
-class PoseEtsimationDataModule(pl.LightningDataModule):
+class PoseEstimationDataModule(pl.LightningDataModule):
     """PyTorch Lightning data module for COCO keypoints."""
     
     def __init__(

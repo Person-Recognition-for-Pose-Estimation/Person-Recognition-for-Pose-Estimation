@@ -43,8 +43,8 @@ from lightning.person_detection.datamodule_v2 import PersonDetectionDataModule
 from lightning.face_recognition.module import FaceRecognitionModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
 
-from lightning.pose_estimation.module import PoseEtsimationModule
-from lightning.pose_estimation.datamodule import PoseEtsimationDataModule
+from lightning.pose_estimation.module import PoseEstimationModule
+from lightning.pose_estimation.datamodule import PoseEstimationDataModule
 
 
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -420,8 +420,8 @@ def main():
         # Pose Estimation Task
         TaskConfig(
             name="pose_estimation",
-            module_class=PoseEtsimationModule,
-            datamodule_class=PoseEtsimationDataModule,
+            module_class=PoseEstimationModule,
+            datamodule_class=PoseEstimationDataModule,
             data_config={
                 "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,

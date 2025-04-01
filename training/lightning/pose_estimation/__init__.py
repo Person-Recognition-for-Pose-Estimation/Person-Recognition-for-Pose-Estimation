@@ -1,4 +1,4 @@
-from .module import PoseEtsimationModule
-from .datamodule import PoseEtsimationDataModule
+from .module import PoseEstimationModule
+from .datamodule import PoseEstimationDataModule
 
-__all__ = ['PoseEtsimationModule', 'PoseEtsimationDataModule']
+__all__ = ['PoseEstimationModule', 'PoseEstimationDataModule']

@@ -88,6 +88,9 @@ class RoundRobinTrainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.resume_checkpoint = resume_checkpoint
         
+        # Initialize empty task states
+        self.task_states = {}
+        
         # Load checkpoint if provided
         if resume_checkpoint is not None:
             self.load_checkpoint(resume_checkpoint)
@@ -270,10 +273,17 @@ class RoundRobinTrainer:
                 'model_state': self.model.state_dict(),
                 'epoch': epoch,
                 'last_task': task_name,
+                # Build new task states while preserving existing optimizer states
                 'task_states': {
                     task.name: {
                         'module_state': self.task_modules[task.name].state_dict(),
-                        'optimizer_state': self.task_modules[task.name].optimizers().state_dict() if hasattr(self.task_modules[task.name], 'optimizers') else None
+                        'optimizer_state': (
+                            # For current task, get current optimizer state
+                            self.task_modules[task.name].optimizers().state_dict() 
+                            if task.name == task_name and hasattr(self.task_modules[task.name], 'optimizers')
+                            # For other tasks, preserve their existing optimizer state
+                            else self.task_states.get(task.name, {}).get('optimizer_state')
+                        )
                     } for task in self.tasks
                 }
             }
@@ -307,14 +317,14 @@ def main():
     parser = argparse.ArgumentParser(description='Round-robin training of multi-task model')
     # Basic training arguments
     parser.add_argument('--logging', choices=['none', 'wandb'], default='none')
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--epochs', type=int, default=15)
+    parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--learning-rate', type=float, default=0.001)
     parser.add_argument('--resume-checkpoint', type=str, help='Path to checkpoint to resume training from')
     parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('/home/ubuntu/thesis/coco'),
                       help='Path to COCO dataset directory. Default: /home/ubuntu/thesis/coco')
-    parser.add_argument('--max-samples-per-epoch-train', type=int, default=1000)
-    parser.add_argument('--max-samples-per-epoch-val', type=int, default=200)
+    parser.add_argument('--max-samples-per-epoch-train', type=int, default=2500)
+    parser.add_argument('--max-samples-per-epoch-val', type=int, default=400)
     
     # # Face detection arguments
     parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/',

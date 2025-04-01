@@ -2,6 +2,8 @@ This repo is the code for for *Using Facial Recognition for Selective Pose Detec
 by William Parker for the Master of Science in Artificial Intelligence 
 program at San José State University.
 
+python training/round_robin_trainer.py --logging wandb
+
 ## Instructions:
 
 All work has been done on Ubuntu 22.04 LTS and Python 3.10.12. All other configurations are untested.

@@ -23,6 +23,7 @@ training/lightning/person_detection/online_datamodule.py
 test_outputs/*
 dataset_folders.zip
 thesis.log
+training_metrics.log
 runs/*
 
 yolo11n.pt

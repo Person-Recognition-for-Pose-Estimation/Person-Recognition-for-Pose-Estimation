@@ -68,7 +68,8 @@ class RoundRobinTrainer:
         base_config: Dict,
         logging_method: str = 'none',
         checkpoint_dir: str = 'checkpoints',
-        resume_checkpoint: Optional[str] = None
+        resume_checkpoint: Optional[str] = None,
+        metrics_log_file: str = 'training_metrics.log'
     ):
         """
         Initialize round-robin trainer.
@@ -88,8 +89,10 @@ class RoundRobinTrainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.resume_checkpoint = resume_checkpoint
         
-        # Initialize empty task states
+        # Initialize empty task states and metrics
         self.task_states = {}
+        self.metrics_log_file = metrics_log_file
+        self.metrics_logger = self._setup_metrics_logger()
         
         # Load checkpoint if provided
         if resume_checkpoint is not None:
@@ -188,7 +191,9 @@ class RoundRobinTrainer:
             
             # Setup trainer
             trainer = pl.Trainer(
-                max_epochs=1,  # We'll control overall epochs in round-robin
+                max_epochs=0,  # We'll control overall epochs in round-robin
+                # max_epochs=-1,  # No epoch limit, we'll use max_steps instead
+                # max_steps=1000,  # Number of training steps per task per round
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
                 devices=1,
                 callbacks=callbacks,
@@ -246,6 +251,8 @@ class RoundRobinTrainer:
                     trainer = self.task_trainers[task.name]
                     data_module = self.task_datamodules[task.name]
                     lightning_module = self.task_modules[task.name]
+
+                    trainer.fit_loop.max_epochs = trainer.fit_loop.max_epochs + 1
                     
                     # Train for one epoch
                     trainer.fit(
@@ -253,6 +260,25 @@ class RoundRobinTrainer:
                         data_module,
                         ckpt_path=None  # We handle state loading ourselves
                     )
+                    
+                    # Collect metrics from the trainer
+                    metrics = {}
+                    for key, value in trainer.callback_metrics.items():
+                        if isinstance(value, torch.Tensor):
+                            metrics[key] = value.item()
+                        else:
+                            metrics[key] = value
+                            
+                    # Log metrics
+                    self._log_metrics(task.name, epoch, metrics)
+                    
+                    # Print current metrics to console
+                    self.logger.info(f"Epoch {epoch + 1} - Task {task.name} Metrics:")
+                    for name, value in metrics.items():
+                        if isinstance(value, float):
+                            self.logger.info(f"  {name}: {value:.6f}")
+                        else:
+                            self.logger.info(f"  {name}: {value}")
                     
                     # Save combined model state
                     self.save_checkpoint(epoch, task.name)
@@ -292,6 +318,60 @@ class RoundRobinTrainer:
         except Exception as e:
             self.logger.error(f"Failed to save checkpoint: {str(e)}")
             
+    def _setup_metrics_logger(self):
+        """Setup a dedicated logger for metrics"""
+        metrics_logger = logging.getLogger('metrics')
+        metrics_logger.setLevel(logging.INFO)
+        
+        # Create file handler
+        fh = logging.FileHandler(self.metrics_log_file)
+        fh.setLevel(logging.INFO)
+        
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(message)s')
+        fh.setFormatter(formatter)
+        
+        # Add handler to logger
+        metrics_logger.addHandler(fh)
+        
+        return metrics_logger
+        
+    def _log_metrics(self, task_name: str, epoch: int, metrics: dict):
+        """Log metrics for a specific task"""
+        # Format metrics nicely
+        train_metrics = {k: v for k, v in metrics.items() if k.startswith('train/')}
+        val_metrics = {k: v for k, v in metrics.items() if k.startswith('val/')}
+        other_metrics = {k: v for k, v in metrics.items() if not (k.startswith('train/') or k.startswith('val/'))}
+        
+        # Create formatted string
+        metric_str = f"\nTask: {task_name}, Epoch: {epoch}"
+        
+        if train_metrics:
+            metric_str += "\nTraining Metrics:"
+            for name, value in train_metrics.items():
+                if isinstance(value, (int, float)):
+                    metric_str += f"\n  {name.replace('train/', '')}: {value:.6f}"
+                else:
+                    metric_str += f"\n  {name.replace('train/', '')}: {value}"
+                    
+        if val_metrics:
+            metric_str += "\nValidation Metrics:"
+            for name, value in val_metrics.items():
+                if isinstance(value, (int, float)):
+                    metric_str += f"\n  {name.replace('val/', '')}: {value:.6f}"
+                else:
+                    metric_str += f"\n  {name.replace('val/', '')}: {value}"
+                    
+        if other_metrics:
+            metric_str += "\nOther Metrics:"
+            for name, value in other_metrics.items():
+                if isinstance(value, (int, float)):
+                    metric_str += f"\n  {name}: {value:.6f}"
+                else:
+                    metric_str += f"\n  {name}: {value}"
+        
+        self.metrics_logger.info(metric_str)
+        
     def load_checkpoint(self, checkpoint_path: str):
         """Load combined model checkpoint"""
         try:
@@ -325,6 +405,8 @@ def main():
                       help='Path to COCO dataset directory. Default: /home/ubuntu/thesis/coco')
     parser.add_argument('--max-samples-per-epoch-train', type=int, default=2500)
     parser.add_argument('--max-samples-per-epoch-val', type=int, default=400)
+    # parser.add_argument('--max-samples-per-epoch-train', type=int, default=200)
+    # parser.add_argument('--max-samples-per-epoch-val', type=int, default=100)
     
     # # Face detection arguments
     parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/',
@@ -460,7 +542,8 @@ def main():
         tasks=tasks,
         base_config=base_config,
         logging_method=args.logging,
-        resume_checkpoint=args.resume_checkpoint
+        resume_checkpoint=args.resume_checkpoint,
+        metrics_log_file='training_metrics.log'
     )
     
     trainer.train(total_epochs=args.epochs)

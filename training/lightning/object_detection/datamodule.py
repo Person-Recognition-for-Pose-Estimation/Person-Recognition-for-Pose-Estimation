@@ -80,7 +80,7 @@ class DetectionDataset(Dataset):
             A.Resize(
                 height=image_size,
                 width=image_size,
-                always_apply=True
+                # always_apply=True
             ),
             # Only horizontal flip during training
             A.HorizontalFlip(p=0.5) if augment else A.NoOp(),

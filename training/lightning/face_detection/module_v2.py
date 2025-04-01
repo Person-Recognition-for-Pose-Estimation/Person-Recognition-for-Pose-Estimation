@@ -22,9 +22,40 @@ class DetectionMetrics:
         self.total_tp = 0
         self.total_fp = 0
         self.ap_scores = []
+
+    def box_area(self, boxes):
+        return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+    def box_iou(self, boxes1, boxes2):
+        area1 = self.box_area(boxes1)  # (N,)
+        area2 = self.box_area(boxes2)  # (M,)
         
+        # Get the coordinates of intersecting rectangles
+        lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # (N,M,2)
+        rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # (N,M,2)
+        
+        # Calculate intersection area
+        wh = (rb - lt).clamp(min=0)  # (N,M,2)
+        inter = wh[:, :, 0] * wh[:, :, 1]  # (N,M)
+        
+        # Calculate union area
+        union = area1[:, None] + area2 - inter
+        
+        # Calculate IoU
+        iou = inter / (union + 1e-6)
+        return iou
+
     def update(self, pred_boxes, pred_scores, pred_classes, gt_boxes, gt_classes):
+        """
+        Args:
+            pred_boxes (Tensor): [N, 4] predicted boxes
+            pred_scores (Tensor): [N] prediction scores
+            pred_classes (Tensor): [N] predicted classes
+            gt_boxes (Tensor): [M, 4] ground truth boxes
+            gt_classes (Tensor): [M] ground truth classes
+        """
         if len(pred_boxes) == 0:
+            self.total_fp += len(gt_boxes)
             self.total_gt += len(gt_boxes)
             return
             
@@ -32,58 +63,69 @@ class DetectionMetrics:
             self.total_fp += len(pred_boxes)
             return
             
-        # Calculate IoU between predictions and ground truth
-        ious = compute_iou(pred_boxes, gt_boxes)  # [num_pred, num_gt]
-        max_ious, max_idx = ious.max(dim=1)
+        # Calculate IoU between all pred and target boxes
+        ious = self.box_iou(pred_boxes, gt_boxes)
         
-        # True positives: IoU > 0.5 and correct class
-        correct_class = pred_classes == gt_classes[max_idx]
-        tp = (max_ious > 0.5) & correct_class
+        # For each pred, get the best matching target
+        best_target_ious, best_target_idx = ious.max(dim=1)
         
-        self.total_tp += tp.sum().item()
-        self.total_fp += (~tp).sum().item()
+        # For each prediction, store (confidence, is_tp, iou)
+        for pred_idx, (pred_score, target_iou) in enumerate(zip(pred_scores, best_target_ious)):
+            if target_iou > 0.5:  # Basic threshold for counting overall TP/FP
+                self.total_tp += 1
+                self.ap_scores.append((pred_score.item(), True, target_iou.item()))
+            else:
+                self.total_fp += 1
+                self.ap_scores.append((pred_score.item(), False, target_iou.item()))
+        
         self.total_gt += len(gt_boxes)
         
-        # Store scores for AP calculation
-        self.ap_scores.extend([
-            (score.item(), tp_i.item())
-            for score, tp_i in zip(pred_scores, tp)
-        ])
-        
     def compute(self):
-        # Compute precision and recall
+        # Base precision and recall
         precision = self.total_tp / (self.total_tp + self.total_fp + 1e-6)
         recall = self.total_tp / (self.total_gt + 1e-6)
         f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
         
-        # Compute AP
-        if not self.ap_scores:
-            ap = 0.0
-        else:
-            # Sort by confidence
-            scores = sorted(self.ap_scores, key=lambda x: x[0], reverse=True)
+        # Multiple IoU thresholds
+        iou_thresholds = torch.linspace(0.5, 0.95, 10)
+        aps = []
+        
+        for iou_threshold in iou_thresholds:
+            threshold_scores = [score for score in self.ap_scores 
+                            if score[2] >= iou_threshold]
+            
+            if not threshold_scores:
+                aps.append(0.0)
+                continue
+            
+            scores = sorted(threshold_scores, key=lambda x: x[0], reverse=True)
             tp = torch.tensor([x[1] for x in scores])
             fp = ~tp
             
-            # Cumulative sum
             tp_cumsum = torch.cumsum(tp, dim=0)
             fp_cumsum = torch.cumsum(fp, dim=0)
             recalls = tp_cumsum / (self.total_gt + 1e-6)
             precisions = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
             
-            # Append start and end points
             recalls = torch.cat((torch.tensor([0]), recalls, torch.tensor([1])))
             precisions = torch.cat((torch.tensor([1]), precisions, torch.tensor([0])))
             
-            # Compute mean AP
             ap = torch.trapz(precisions, recalls).item()
+            aps.append(ap)
+        
+        mAP50 = aps[0]  # mAP at IoU=0.5
+        mAP75 = aps[5]  # mAP at IoU=0.75
+        mAP = sum(aps) / len(aps)  # average mAP across all thresholds
         
         return {
             'precision': precision,
             'recall': recall,
             'f1': f1,
-            'mAP': ap
+            'mAP50': mAP50,
+            'mAP75': mAP75,
+            'mAP': mAP
         }
+
 
 class FaceDetectionModule(pl.LightningModule):
     def __init__(
@@ -145,40 +187,40 @@ class FaceDetectionModule(pl.LightningModule):
         Returns:
             tuple: (total_loss, loss_dict)
         """
-        print("\n=== Computing Detection Loss ===")
-        print(f"Initial pred_boxes shape: {pred_boxes.shape}")
-        print(f"Initial pred_scores shape: {pred_scores.shape}")
+        # print("\n=== Computing Detection Loss ===")
+        # print(f"Initial pred_boxes shape: {pred_boxes.shape}")
+        # print(f"Initial pred_scores shape: {pred_scores.shape}")
         
         # Get target boxes and classes
         gt_boxes = targets['boxes']  # [N, 4]
         gt_classes = targets['labels']  # [N]
         batch_idx = targets['batch_idx']  # [N]
         
-        print(f"Ground truth shapes:")
-        print(f"- boxes: {gt_boxes.shape}")
-        print(f"- classes: {gt_classes.shape}")
-        print(f"- batch_idx: {batch_idx.shape}")
-        print(f"Unique batch indices: {torch.unique(batch_idx)}")
+        # print(f"Ground truth shapes:")
+        # print(f"- boxes: {gt_boxes.shape}")
+        # print(f"- classes: {gt_classes.shape}")
+        # print(f"- batch_idx: {batch_idx.shape}")
+        # print(f"Unique batch indices: {torch.unique(batch_idx)}")
         
         B = pred_boxes.shape[0]
         total_loss = 0
         num_targets = len(gt_boxes)
         losses = {}
         
-        print(f"\nBatch size: {B}, Total targets: {num_targets}")
+        # print(f"\nBatch size: {B}, Total targets: {num_targets}")
         
         # Ensure boxes are in [B, N, 4] format
         if pred_boxes.shape[1] == 4:
-            print("Transposing predictions to [B, N, 4] format")
+            # print("Transposing predictions to [B, N, 4] format")
             pred_boxes = pred_boxes.transpose(1, 2)  # [B, N, 4]
             pred_scores = pred_scores.transpose(1, 2)  # [B, N, C]
-            print(f"After transpose - boxes: {pred_boxes.shape}, scores: {pred_scores.shape}")
+            # print(f"After transpose - boxes: {pred_boxes.shape}, scores: {pred_scores.shape}")
         
         # Filter predictions by confidence to reduce computation
         score_threshold = 0.01  # Adjust as needed
         max_scores, _ = pred_scores.max(dim=-1)  # [B, N]
-        print(f"\nMax scores shape: {max_scores.shape}")
-        print(f"Score range: min={max_scores.min().item():.4f}, max={max_scores.max().item():.4f}")
+        # print(f"\nMax scores shape: {max_scores.shape}")
+        # print(f"Score range: min={max_scores.min().item():.4f}, max={max_scores.max().item():.4f}")
         
         for b in range(B):
             # print(f"\n--- Processing batch {b} ---")
@@ -276,7 +318,7 @@ class FaceDetectionModule(pl.LightningModule):
                     )
                     total_loss += bg_loss
                     losses[f'bg_loss_{b}'] = bg_loss.item()
-                    print(f"Background loss: {bg_loss.item():.4f}")
+                    # print(f"Background loss: {bg_loss.item():.4f}")
             except Exception as e:
                 # print(f"Error during IoU computation: {str(e)}")
                 # print(f"Pred boxes stats - min: {b_pred_boxes.min().item():.4f}, max: {b_pred_boxes.max().item():.4f}")
@@ -361,11 +403,11 @@ class FaceDetectionModule(pl.LightningModule):
             pred_boxes = torch.cat(all_boxes, dim=2)  # [B, 4, total_grid_points]
             pred_scores = torch.cat(all_scores, dim=2)  # [B, 1, total_grid_points]
             
-            print("\nFinal predictions:")
-            print(f"Boxes shape: {pred_boxes.shape}")
-            print(f"Scores shape: {pred_scores.shape}")
-            print(f"Box range: min={pred_boxes.min().item():.4f}, max={pred_boxes.max().item():.4f}")
-            print(f"Score range: min={pred_scores.min().item():.4f}, max={pred_scores.max().item():.4f}")
+            # print("\nFinal predictions:")
+            # print(f"Boxes shape: {pred_boxes.shape}")
+            # print(f"Scores shape: {pred_scores.shape}")
+            # print(f"Box range: min={pred_boxes.min().item():.4f}, max={pred_boxes.max().item():.4f}")
+            # print(f"Score range: min={pred_scores.min().item():.4f}, max={pred_scores.max().item():.4f}")
             
             return pred_boxes, pred_scores
         else:
@@ -390,15 +432,15 @@ class FaceDetectionModule(pl.LightningModule):
             targets['boxes'] = targets['boxes'] * img_size
             
             # Debug box coordinates
-            print("\nBox coordinate ranges:")
-            print(f"Pred boxes - x1: [{pred_boxes[:,:,0].min():.1f}, {pred_boxes[:,:,0].max():.1f}], "
-                  f"y1: [{pred_boxes[:,:,1].min():.1f}, {pred_boxes[:,:,1].max():.1f}], "
-                  f"x2: [{pred_boxes[:,:,2].min():.1f}, {pred_boxes[:,:,2].max():.1f}], "
-                  f"y2: [{pred_boxes[:,:,3].min():.1f}, {pred_boxes[:,:,3].max():.1f}]")
-            print(f"GT boxes - x1: [{targets['boxes'][:,0].min():.1f}, {targets['boxes'][:,0].max():.1f}], "
-                  f"y1: [{targets['boxes'][:,1].min():.1f}, {targets['boxes'][:,1].max():.1f}], "
-                  f"x2: [{targets['boxes'][:,2].min():.1f}, {targets['boxes'][:,2].max():.1f}], "
-                  f"y2: [{targets['boxes'][:,3].min():.1f}, {targets['boxes'][:,3].max():.1f}]")
+            # print("\nBox coordinate ranges:")
+            # print(f"Pred boxes - x1: [{pred_boxes[:,:,0].min():.1f}, {pred_boxes[:,:,0].max():.1f}], "
+            #       f"y1: [{pred_boxes[:,:,1].min():.1f}, {pred_boxes[:,:,1].max():.1f}], "
+            #       f"x2: [{pred_boxes[:,:,2].min():.1f}, {pred_boxes[:,:,2].max():.1f}], "
+            #       f"y2: [{pred_boxes[:,:,3].min():.1f}, {pred_boxes[:,:,3].max():.1f}]")
+            # print(f"GT boxes - x1: [{targets['boxes'][:,0].min():.1f}, {targets['boxes'][:,0].max():.1f}], "
+            #       f"y1: [{targets['boxes'][:,1].min():.1f}, {targets['boxes'][:,1].max():.1f}], "
+            #       f"x2: [{targets['boxes'][:,2].min():.1f}, {targets['boxes'][:,2].max():.1f}], "
+            #       f"y2: [{targets['boxes'][:,3].min():.1f}, {targets['boxes'][:,3].max():.1f}]")
             
             loss, loss_dict = self.compute_loss(pred_boxes, pred_scores, targets)
         

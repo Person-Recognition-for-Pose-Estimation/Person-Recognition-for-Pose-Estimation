@@ -2,8 +2,6 @@ This repo is the code for for *Using Facial Recognition for Selective Pose Detec
 by William Parker for the Master of Science in Artificial Intelligence 
 program at San José State University.
 
-python training/round_robin_trainer.py --logging wandb
-
 ## Instructions:
 
 All work has been done on Ubuntu 22.04 LTS and Python 3.10.12. All other configurations are untested.
@@ -14,7 +12,7 @@ All work has been done on Ubuntu 22.04 LTS and Python 3.10.12. All other configu
 4. Download the component models `python scripts/download_models.py`
 5. Combine the models into a multi-task model: `python scripts/modify_models.py`
 6. Download the datasets by following the instructions in: `download_datasets.ipynb`
-7. Train the model: `python training_ultra/test_yolo.py`
+7. Combine and Train the model: `python training/round_robin_trainer.py`
 
 ## Project Organization:
 - `component_models/`: Holds the original downloads of the separate models. Created by `download_models.py`

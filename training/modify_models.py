@@ -22,58 +22,162 @@ def get_model_paths() -> Tuple[pathlib.Path, pathlib.Path]:
 
 #################### YOLO ####################
 
+import sys
+from pathlib import Path
 
-from ultralytics import YOLO
 
+import sys
+sys.path.append('/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/training/yolopt')
+
+
+from yolopt.nets.nn import YOLO, yolo_v11_n, Conv, Head
 
 class CustomYOLO(nn.Module):
-    def __init__(self, yolo_model, backbone_channels=2048):
-        super(CustomYOLO, self).__init__()
+    def __init__(self, yolo_model, backbone_channels: int = 2048):
+        super().__init__()
         
-        # Define target size that YOLO expects (typically 640x640 or similar)
-        self.target_size = 640  # or whatever size your YOLO model expects
-        
+        # Feature adaptation with spatial upsampling and channel reduction
         self.adapter = nn.Sequential(
+            # Initial dimensionality reduction to save memory before upsampling
             nn.Conv2d(backbone_channels, 512, kernel_size=1),
             nn.BatchNorm2d(512),
             nn.SiLU(),
             
-            # Adaptive pooling to get consistent spatial dimensions
-            nn.AdaptiveAvgPool2d((self.target_size // 32, self.target_size // 32)),
+            # Upsample to larger spatial dimensions for YOLO
+            nn.Upsample(size=(160, 160), mode='bilinear', align_corners=True),
             
-            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            # Spatial feature processing with residual connection
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.SiLU(),
+            
+            # Progressive channel reduction while maintaining spatial information
+            nn.Conv2d(512, 256, kernel_size=1),
             nn.BatchNorm2d(256),
             nn.SiLU(),
             
-            # Upsample to match YOLO's expected input size
-            nn.Upsample(size=(self.target_size, self.target_size), mode='bilinear', align_corners=True),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.SiLU(),
             
-            # Final adaptation to 3 channels
-            nn.Conv2d(256, 3, kernel_size=1),
+            # Final adaptation to match YOLO input (3 channels)
+            nn.Conv2d(128, 64, kernel_size=1),
+            nn.BatchNorm2d(64),
+            nn.SiLU(),
+            
+            nn.Conv2d(64, 3, kernel_size=3, padding=1),
             nn.BatchNorm2d(3),
             nn.SiLU()
         )
         
+        # First create with 80 classes (COCO default)
         self.yolo = yolo_model
-    
-    def forward(self, backbone_features):
-        # print(f"Input backbone features shape: {backbone_features.shape}")
-        x = self.adapter(backbone_features)
-        # print(f"After adapter shape: {x.shape}")
         
-        # Ensure the input is properly scaled
-        x = (x - x.min()) / (x.max() - x.min())  # Normalize to [0,1]
+    def forward(self, x):
+        print("\n=== CustomYOLO Forward Pass ===")
+        print(f"Input shape: {x.shape}")
         
-        detections = self.yolo.model(x)
-        return detections
+        # Adapter network
+        x = self.adapter(x)
+        print(f"After adapter shape: {x.shape}")
+        
+        x = x - x.mean(dim=(2, 3), keepdim=True)
+        x = x / (x.std(dim=(2, 3), keepdim=True) + 1e-6)
+        x = torch.sigmoid(x)
+        print(f"After normalization shape: {x.shape}")
+        
+        # YOLO backbone and FPN
+        darknet_features = self.yolo.net(x)
+        print(f"DarkNet output shapes: {[f.shape for f in darknet_features]}")
+        
+        fpn_features = self.yolo.fpn(darknet_features)
+        print(f"FPN output shapes: {[f.shape for f in fpn_features]}")
+        
+        head_output = self.yolo.head(list(fpn_features))
+        if isinstance(head_output, list):
+            print(f"Head output (training): {[h.shape for h in head_output]}")
+        else:
+            print(f"Head output (inference) shape: {head_output.shape}")
+        
+        if self.training:
+            return head_output  # List of feature maps for training
+        else:
+            # Process predictions into boxes and scores
+            return self.process_predictions(head_output)
+            
+    def process_predictions(self, predictions):
+        """Process YOLO predictions into boxes and scores."""
+        print("\n=== Processing Predictions ===")
+        print(f"Input predictions type: {type(predictions)}")
+        if isinstance(predictions, list):
+            print("Processing training mode predictions")
+            # Training mode - process feature maps
+            all_boxes = []
+            all_scores = []
+            for i, feat_map in enumerate(predictions):
+                print(f"\nFeature map {i} shape: {feat_map.shape}")
+                # Split predictions into boxes and scores
+                boxes = feat_map[..., :4]  # First 4 channels are box predictions
+                scores = feat_map[..., 4:]  # Remaining channels are class scores
+                print(f"Split shapes - boxes: {boxes.shape}, scores: {scores.shape}")
+                
+                # Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2]
+                boxes = self.convert_boxes_cxcywh_to_xyxy(boxes)
+                print(f"After conversion - boxes shape: {boxes.shape}")
+                
+                all_boxes.append(boxes)
+                all_scores.append(scores)
+            
+            # Concatenate predictions from all feature levels
+            pred_boxes = torch.cat(all_boxes, dim=1)
+            pred_scores = torch.cat(all_scores, dim=1)
+            print(f"\nFinal concatenated shapes - boxes: {pred_boxes.shape}, scores: {pred_scores.shape}")
+            
+            final_output = torch.cat([pred_boxes, pred_scores], dim=1)
+            print(f"Final output shape: {final_output.shape}")
+            return final_output
+        else:
+            print("Processing inference mode predictions")
+            print(f"Predictions shape: {predictions.shape}")
+            return predictions
+            
+    def convert_boxes_cxcywh_to_xyxy(self, boxes):
+        """Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2] format"""
+        if boxes.size(-1) != 4:
+            boxes = boxes.transpose(-1, -2)  # Move channels to last dimension if needed
+            
+        cx, cy, w, h = boxes.unbind(-1)
+        x1 = cx - w/2
+        y1 = cy - h/2
+        x2 = cx + w/2
+        y2 = cy + h/2
+        return torch.stack([x1, y1, x2, y2], dim=-1)
 
-        
-        # TODO: If inference, process detections
-        # processed_detections = []
-        # for detection in detections:
-        #     processed = self._process_detection(detection)
-        #     processed_detections.append(processed)
-        # return processed_detections
+def modify_yolo(model_path):
+    print("Loading YOLO model...")
+    model = torch.load(str(model_path), map_location='cpu', weights_only=False)
+    print(f"\nCheckpoint type: {type(model)}")
+    
+    # Extract model
+    if isinstance(model, dict):
+        if 'model' in model:
+            print("Found 'model' key in checkpoint")
+            model = model['model']
+
+    width = [3, 16, 32, 64, 128, 256]
+    new_head = Head(nc=1, filters=(width[3], width[4], width[5]))
+
+    for i in range(len(model.head.box)):
+        new_head.box[i].load_state_dict(model.head.box[i].state_dict())
+
+    for i in range(len(model.head.cls)):
+        # Transfer all layers except the final classification layer
+        for j in range(len(new_head.cls[i]) - 1):
+            new_head.cls[i][j].load_state_dict(model.head.cls[i][j].state_dict())
+
+    model.head = new_head
+    
+    return CustomYOLO(model)
 
 
 def create_yolo_branches(
@@ -83,21 +187,16 @@ def create_yolo_branches(
     device: str = 'cpu'
 ) -> Tuple[CustomYOLO, CustomYOLO]:
     """Create YOLO branches for person and face detection."""
-    # Person detection
+
+    # Person detection (1 class - person)
     person_model_path = component_models_dir / "yolo11n.pt"
-    yolo_model = YOLO(str(person_model_path))
+    person_detect_branch = modify_yolo(person_model_path)
+    print("Initialized new classification head for person detection")
 
-    yolo_model.overrides['data'] = "/home/ubuntu/coco/data.yaml"
-
-    person_detect_branch = CustomYOLO(yolo_model)
-    
-    # Face detection
-    face_model_path = component_models_dir / "yolov11n-face.pt"
-    yolo_face_model = YOLO(str(face_model_path))
-
-    yolo_face_model.overrides['data'] = "/home/ubuntu/datasets/yolo_face/data.yaml"
-
-    face_detect_branch = CustomYOLO(yolo_face_model)
+    # face detection (1 class - face)
+    face_model_path = component_models_dir / "yolo11n.pt"
+    face_detect_branch = modify_yolo(face_model_path)
+    print("Initialized new classification head for person detection")
     
     if save_components:
         torch.save(person_detect_branch.state_dict(), edited_components_dir / "custom_yolo.pth")
@@ -127,19 +226,24 @@ class CustomAdaFace(nn.Module):
     def __init__(self, pretrained_path, config, backbone_channels=2048):
         super(CustomAdaFace, self).__init__()
         
-        # Define adapter network
+        # Define adapter network for backbone features (2048 channels)
         self.adapter = nn.Sequential(
-            # Initial channel reduction and processing
-            nn.Conv2d(backbone_channels, 256, kernel_size=1),
+            # Initial channel reduction
+            nn.Conv2d(backbone_channels, 512, kernel_size=1),  # 1x1 conv for channel reduction
+            nn.BatchNorm2d(512),
+            nn.PReLU(512),
+            
+            # Spatial upsampling to match AdaFace input size (112x112)
+            nn.Upsample(size=(112, 112), mode='bilinear', align_corners=True),
+            
+            # Feature processing after upsampling
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
             nn.BatchNorm2d(256),
-            nn.PReLU(256),  # AdaFace uses PReLU
+            nn.PReLU(256),
             
             nn.Conv2d(256, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
             nn.PReLU(128),
-            
-            # Adaptive pooling to get consistent spatial dimensions
-            nn.AdaptiveAvgPool2d((112, 112)),  # Common input size for face recognition
             
             # Final adaptation to match AdaFace input
             nn.Conv2d(128, 64, kernel_size=3, padding=1),
@@ -150,7 +254,7 @@ class CustomAdaFace(nn.Module):
         # Load the complete pre-trained AdaFace model
         self.adaface_model = build_model(model_name=config.arch)
         
-        checkpoint = torch.load(pretrained_path)
+        checkpoint = torch.load(pretrained_path, weights_only=False)
         if 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
         else:
@@ -197,9 +301,9 @@ class Config:
     def __init__(self):
         self.arch = 'ir_50'
         self.head = 'adaface'
-        self.num_classes = 70722
-        self.embedding_size: int = 512,
-        self.backbone_channels: int = 2048,
+        self.num_classes = 85742  # Updated to match actual number of identities
+        self.embedding_size = 512
+        self.backbone_channels = 2048
         self.m = 0.4
         self.h = 0.333
         self.t_alpha = 0.01

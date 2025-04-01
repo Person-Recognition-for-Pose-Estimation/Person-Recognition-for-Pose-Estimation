@@ -1,6 +1,6 @@
 path: Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face  # dataset root dir
-train: train/images  # train images
-val: val/images  # val images
+train: images/train  # train images
+val: images/val  # val images
 # test: test/images  # test images
 
 # Classes

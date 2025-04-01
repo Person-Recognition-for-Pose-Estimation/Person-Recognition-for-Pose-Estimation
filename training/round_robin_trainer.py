@@ -34,11 +34,11 @@ from dataclasses import dataclass
 import logging
 
 # Detection modules
-from lightning.face_detection.module import FaceDetectionModule
-from lightning.face_detection.datamodule import FaceDetectionDataModule
+from lightning.face_detection.module_v2 import FaceDetectionModule
+from lightning.face_detection.datamodule_v2 import FaceDetectionDataModule
 
-from lightning.person_detection.module import PersonDetectionModule
-from lightning.person_detection.datamodule import PersonDetectionDataModule
+from lightning.person_detection.module_v2 import PersonDetectionModule
+from lightning.person_detection.datamodule_v2 import PersonDetectionDataModule
 
 from lightning.face_recognition.module import FaceRecognitionModule
 from lightning.face_recognition.datamodule import FaceRecognitionDataModule
@@ -47,7 +47,7 @@ from lightning.pose_estimation.module import PoseEtsimationModule
 from lightning.pose_estimation.datamodule import PoseEtsimationDataModule
 
 
-from lightning.callbacks import YOLOLoggingCallback, YOLOModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from modify_models import create_combined_model
 
 @dataclass
@@ -67,7 +67,8 @@ class RoundRobinTrainer:
         tasks: List[TaskConfig],
         base_config: Dict,
         logging_method: str = 'none',
-        checkpoint_dir: str = 'checkpoints'
+        checkpoint_dir: str = 'checkpoints',
+        resume_checkpoint: Optional[str] = None
     ):
         """
         Initialize round-robin trainer.
@@ -85,6 +86,11 @@ class RoundRobinTrainer:
         self.logging_method = logging_method
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.resume_checkpoint = resume_checkpoint
+        
+        # Load checkpoint if provided
+        if resume_checkpoint is not None:
+            self.load_checkpoint(resume_checkpoint)
         
         # Create logger
         self.logger = logging.getLogger(__name__)
@@ -118,6 +124,9 @@ class RoundRobinTrainer:
         self.task_datamodules = {}
         self.task_modules = {}
         
+        # Get saved task states if available
+        task_states = getattr(self, 'task_states', {})
+        
         for task in self.tasks:
             # Create data module
             data_module = task.datamodule_class(**task.data_config)
@@ -131,16 +140,9 @@ class RoundRobinTrainer:
                     config={**self.base_config, **task.module_config}
                 )
             
-            # Setup callbacks
-            callbacks = [
-                YOLOLoggingCallback(
-                    log_interval=100,
-                    logging_method=self.logging_method
-                ),
-                YOLOModelCheckpoint(
-                    save_path=str(self.checkpoint_dir / task.name)
-                ),
-                ModelCheckpoint(
+            # Setup callbacks based on task type
+            if task.name in ['face_detection', 'person_detection']:
+                callbacks = ModelCheckpoint(
                     dirpath=str(self.checkpoint_dir / task.name),
                     filename=f"{task.name}-{{epoch:02d}}-{{val_mAP50-95:.2f}}",
                     monitor="val/mAP50-95",
@@ -148,7 +150,32 @@ class RoundRobinTrainer:
                     save_top_k=3,
                     every_n_epochs=self.base_config.get("save_period", 1)
                 )
-            ]
+            elif task.name == 'face_recognition':
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}-{{val_acc:.2f}}",
+                    monitor="val_acc",
+                    mode="max",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
+            elif task.name == 'pose_estimation':
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}-{{val_pck:.2f}}",
+                    monitor="val_pck",
+                    mode="max",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
+            else:
+                # Default checkpoint configuration
+                callbacks = ModelCheckpoint(
+                    dirpath=str(self.checkpoint_dir / task.name),
+                    filename=f"{task.name}-{{epoch:02d}}",
+                    save_top_k=3,
+                    every_n_epochs=self.base_config.get("save_period", 1)
+                )
             
             # Create Lightning module
             lightning_module = task.module_class(
@@ -164,8 +191,8 @@ class RoundRobinTrainer:
                 callbacks=callbacks,
                 val_check_interval=self.base_config.get("val_check_interval", 1.0),
                 precision=16 if self.base_config.get("amp", True) else 32,
-                gradient_clip_val=0.1,
-                accumulate_grad_batches=self.base_config.get("accumulate", 1),
+                # gradient_clip_val=0.1,
+                # accumulate_grad_batches=self.base_config.get("accumulate", 1),
                 log_every_n_steps=10,
                 logger=wandb_logger,
                 enable_checkpointing=True,
@@ -175,6 +202,24 @@ class RoundRobinTrainer:
             self.task_datamodules[task.name] = data_module
             self.task_modules[task.name] = lightning_module
             
+            # Load task state if available
+            if task.name in task_states:
+                state = task_states[task.name]
+                lightning_module.load_state_dict(state['module_state'])
+                if state['optimizer_state'] is not None and hasattr(lightning_module, 'configure_optimizers'):
+                    # Store optimizer state to be loaded after optimizer is created
+                    lightning_module._optimizer_state = state['optimizer_state']
+                    
+                    # Monkey patch configure_optimizers to load optimizer state
+                    original_configure_optimizers = lightning_module.configure_optimizers
+                    def configure_optimizers_with_state(self):
+                        optimizer = original_configure_optimizers()
+                        if hasattr(self, '_optimizer_state'):
+                            optimizer.load_state_dict(self._optimizer_state)
+                            del self._optimizer_state
+                        return optimizer
+                    lightning_module.configure_optimizers = configure_optimizers_with_state.__get__(lightning_module)
+            
     def train(self, total_epochs: int):
         """
         Train all tasks in round-robin fashion.
@@ -183,7 +228,8 @@ class RoundRobinTrainer:
             total_epochs: Total number of epochs to train
         """
         try:
-            for epoch in range(total_epochs):
+            start_epoch = getattr(self, 'start_epoch', 0)
+            for epoch in range(start_epoch, total_epochs):
                 self.logger.info(f"Starting epoch {epoch + 1}/{total_epochs}")
                 
                 # Train each task for one epoch
@@ -202,7 +248,7 @@ class RoundRobinTrainer:
                     trainer.fit(
                         lightning_module,
                         data_module,
-                        ckpt_path=None  # Don't resume for now
+                        ckpt_path=None  # We handle state loading ourselves
                     )
                     
                     # Save combined model state
@@ -223,12 +269,38 @@ class RoundRobinTrainer:
             save_dict = {
                 'model_state': self.model.state_dict(),
                 'epoch': epoch,
-                'last_task': task_name
+                'last_task': task_name,
+                'task_states': {
+                    task.name: {
+                        'module_state': self.task_modules[task.name].state_dict(),
+                        'optimizer_state': self.task_modules[task.name].optimizers().state_dict() if hasattr(self.task_modules[task.name], 'optimizers') else None
+                    } for task in self.tasks
+                }
             }
             torch.save(save_dict, save_path)
             self.logger.info(f"Saved combined model to {save_path}")
         except Exception as e:
             self.logger.error(f"Failed to save checkpoint: {str(e)}")
+            
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load combined model checkpoint"""
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            self.model.load_state_dict(checkpoint['model_state'])
+            self.logger.info(f"Loaded model state from {checkpoint_path}")
+            
+            # Store checkpoint info for resuming training
+            self.start_epoch = checkpoint['epoch'] + 1
+            self.last_task = checkpoint['last_task']
+            
+            # Load task states if available
+            if 'task_states' in checkpoint:
+                self.task_states = checkpoint['task_states']
+            
+            self.logger.info(f"Resuming from epoch {self.start_epoch}, last task: {self.last_task}")
+        except Exception as e:
+            self.logger.error(f"Failed to load checkpoint: {str(e)}")
+            raise
 
 def main():
     # Parse arguments
@@ -238,50 +310,23 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--learning-rate', type=float, default=0.001)
-    parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('/home/ubuntu/coco'),
-                      help='Path to COCO dataset directory. Default: /home/ubuntu/coco')
+    parser.add_argument('--resume-checkpoint', type=str, help='Path to checkpoint to resume training from')
+    parser.add_argument('--coco-dir', type=str, default=os.path.expanduser('/home/ubuntu/thesis/coco'),
+                      help='Path to COCO dataset directory. Default: /home/ubuntu/thesis/coco')
+    parser.add_argument('--max-samples-per-epoch-train', type=int, default=1000)
+    parser.add_argument('--max-samples-per-epoch-val', type=int, default=200)
     
     # # Face detection arguments
-    parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/datasets/yolo_face',
+    parser.add_argument('--face-det-data-dir', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/',
                       help='Path to YOLO format data config for face detection')
-    parser.add_argument('--face-det-data-cfg', type=str, default='/home/ubuntu/datasets/yolo_face/data.yaml',
+    parser.add_argument('--face-det-data-cfg', type=str, default='/home/ubuntu/thesis/Person-Recognition-for-Pose-Estimation/dataset_folders/yolo_face/data.yaml',
                       help='Path to YOLO format data config for face detection')
     
     # # Person detection arguments
-    # parser.add_argument('--coco-train-path', type=str, required=True,
-    #                   help='Path to COCO train annotations')
-    # parser.add_argument('--coco-val-path', type=str, required=True,
-    #                   help='Path to COCO validation annotations')
-    # parser.add_argument('--coco-train-img-dir', type=str, required=True,
-    #                   help='Path to COCO train images directory')
-    # parser.add_argument('--coco-val-img-dir', type=str, required=True,
-    #                   help='Path to COCO validation images directory')
     
     # Face Recognition arguments
     parser.add_argument('--face-data-dir', type=str, default='/home/ubuntu/datasets/ada_face',
                       help='Path to face recognition training folder')
-    # parser.add_argument('--face-train-rec', type=str, default="train.rec",
-    #                   help='Path to face recognition training .rec file')
-    # parser.add_argument('--face-train-idx', type=str, default="train.idx",
-    #                   help='Path to face recognition training .idx file')
-    # parser.add_argument('--face-val-rec', type=str, default="val.rec",
-    #                   help='Path to face recognition validation .rec file')
-    # parser.add_argument('--face-val-idx', type=str, default="val.idx",
-    #                   help='Path to face recognition validation .idx file')
-    # parser.add_argument('--face-num-classes', type=int, default=70722,
-    #                   help='Number of identity classes in face recognition dataset')
-    # parser.add_argument('--face-embedding-size', type=int, default=512,
-    #                   help='Size of face embeddings')
-    # parser.add_argument('--face-margin', type=float, default=0.4,
-    #                   help='Margin for AdaFace loss')
-    # parser.add_argument('--face-norm-multiplier', type=float, default=0.333,
-    #                   help='Norm multiplier for AdaFace')
-    # parser.add_argument('--face-scale', type=float, default=64.0,
-    #                   help='Scale for AdaFace')
-    # parser.add_argument('--face-ema-decay', type=float, default=0.01,
-    #                   help='EMA decay rate for AdaFace batch statistics')
-    # parser.add_argument('--face-val-dir', type=str,
-    #                   help='Path to face recognition validation directory')
     
     # Pose Estimation arguments
     parser.add_argument('--pose-img-size', type=int, default=256,
@@ -292,14 +337,6 @@ def main():
                       help='Confidence threshold for keypoint visibility')
     
     args = parser.parse_args()
-
-    # if args.face_det_data_cfg is None:
-    #     filepath = pathlib.Path(__file__).parent.resolve()
-    #     args.face_det_data_cfg = str(Path(os.path.join(filepath, "..", "dataset_folders", "yolo_face", "data.yaml")))
-
-    # if args.face_data_dir is None:
-    #     filepath = pathlib.Path(__file__).parent.resolve()
-    #     args.face_data_dir = str(Path(os.path.join(filepath, "..", "dataset_folders", "ada_face")))
 
     # Base configuration
     base_config = {
@@ -322,18 +359,15 @@ def main():
             data_config={
                 "data_dir": args.face_det_data_dir,
                 "batch_size": args.batch_size,
+                "image_size": 640,
                 "num_workers": base_config["workers"],
+                "pin_memory": True,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
-                "data_cfg": args.face_det_data_cfg,
                 "learning_rate": args.learning_rate,
-                "epochs": 1,  # Single epoch per round
-                "batch": args.batch_size,
-                "imgsz": 640,
-                "device": 0 if torch.cuda.is_available() else "cpu",
-                "amp": base_config["amp"],
-                "workers": base_config["workers"],
-                "save_period": base_config["save_period"],
+                "weight_decay": base_config.get("weight_decay", 0.0005),
             },
             wandb_project="yolo-face-detection"
         ),
@@ -346,22 +380,15 @@ def main():
             data_config={
                 "data_dir": args.coco_dir,
                 "batch_size": args.batch_size,
+                "image_size": 640,
                 "num_workers": base_config["workers"],
-                "img_size": 640,
-                "max_samples_per_epoch_train": 1000,
-                "max_samples_per_epoch_val": 200,
+                "pin_memory": True,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
-                "data_cfg": None,  # Not using YOLO data.yaml
-                "num_classes": 1,  # Person class only
                 "learning_rate": args.learning_rate,
-                "epochs": 1,  # Single epoch per round
-                "batch": args.batch_size,
-                "imgsz": 640,
-                "device": 0 if torch.cuda.is_available() else "cpu",
-                "amp": base_config["amp"],
-                "workers": base_config["workers"],
-                "save_period": base_config["save_period"],
+                "weight_decay": base_config.get("weight_decay", 0.0005),
             },
             wandb_project="yolo-person-detection"
         ),
@@ -372,9 +399,11 @@ def main():
             module_class=FaceRecognitionModule,
             datamodule_class=FaceRecognitionDataModule,
             data_config={
-                "data_dir": os.path.dirname(args.face_data_dir),
+                "data_dir": args.face_data_dir,
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
                 # "num_classes": args.face_num_classes,
@@ -398,8 +427,8 @@ def main():
                 "batch_size": args.batch_size,
                 "num_workers": base_config["workers"],
                 "img_size": args.pose_img_size,
-                "max_samples_per_epoch_train": 1000,
-                "max_samples_per_epoch_val": 200,
+                "max_samples_per_epoch_train": args.max_samples_per_epoch_train,
+                "max_samples_per_epoch_val": args.max_samples_per_epoch_val,
             },
             module_config={
                 "learning_rate": args.learning_rate,
@@ -420,7 +449,8 @@ def main():
         model=model,
         tasks=tasks,
         base_config=base_config,
-        logging_method=args.logging
+        logging_method=args.logging,
+        resume_checkpoint=args.resume_checkpoint
     )
     
     trainer.train(total_epochs=args.epochs)

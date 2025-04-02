@@ -27,3 +27,5 @@ training_metrics.log
 runs/*
 
 yolo11n.pt
+
+_checkpoints/*

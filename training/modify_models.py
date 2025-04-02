@@ -191,12 +191,12 @@ def create_yolo_branches(
     # Person detection (1 class - person)
     person_model_path = component_models_dir / "yolo11n.pt"
     person_detect_branch = modify_yolo(person_model_path)
-    print("Initialized new classification head for person detection")
+    print("Initialized YOLO person branch")
 
     # face detection (1 class - face)
     face_model_path = component_models_dir / "yolo11n.pt"
     face_detect_branch = modify_yolo(face_model_path)
-    print("Initialized new classification head for person detection")
+    print("Initialized YOLO face branch")
     
     if save_components:
         torch.save(person_detect_branch.state_dict(), edited_components_dir / "custom_yolo.pth")
